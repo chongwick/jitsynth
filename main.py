@@ -5,6 +5,8 @@ from jc import *
 import secrets
 from walker import Walker
 import json
+from seqNodes import *
+from sequence import *
 
 COMPONENT_MAP = "component_map.json"
 
@@ -35,9 +37,21 @@ def populate_map(seeds):
                 component_map[node_type] = [s]
             else:
                 if s not in component_map[node_type]:
+                    '''
+                    we need to be appending the graph name, not the 
+                    source code file name
+                    '''
                     component_map[node_type].append(s)
+
         for env in seq.output_all_envs():
-            ...
+            if isinstance(env,FunctionBranch):
+                print("HERE")
+            else:
+                if env.flow_type not in component_map:
+                    component_map[env.flow_type] = [s]
+                else:
+                    if s not in component_map[env.flow_type]:
+                        component_map[env.flow_type].append(s)
 
         _write_component_map(component_map)
 

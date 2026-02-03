@@ -1,5 +1,11 @@
 {
     "GenericSeqNode": [
         "seeds/g.php"
+    ],
+    "MiddleOpNode": [
+        "seeds/g.php"
+    ],
+    "if": [
+        "seeds/g.php"
     ]
 }
