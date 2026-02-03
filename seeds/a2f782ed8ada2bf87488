@@ -1,0 +1,10 @@
+<?php
+class test_class {
+static protected function test_func4() {
+}
+}
+if (is_callable(array('test_class','test_func4'))) {
+test_class::test_func4();
+}
+?>
+OK

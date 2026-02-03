@@ -1,0 +1,10 @@
+<?php
+
+$_ENV = [];
+$_SERVER = [ 'test' => 'test' ];
+
+$reference =& $_SERVER;
+
+phpinfo(INFO_VARIABLES);
+
+?>

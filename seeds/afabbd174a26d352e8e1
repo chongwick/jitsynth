@@ -1,0 +1,3 @@
+<?php
+imagecreatefrompng('php://filter/read=convert.base64-encode/resource=' . __DIR__ . '/test.png');
+?>

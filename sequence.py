@@ -193,11 +193,15 @@ class FunctionBranch(Seq):
             self.node_env = {}
         self.root = None 
         self.parent_env = parent
+        self.flow_type = 'function'
         self.all_nodes = []
         self.params = {}
         #I'm assuming functions can't have functions. something's gonna break if not
         self.children_envs = {"Function":{},
                               "Flow":{}}
+
+    def get_flow_type(self):
+        return self.flow_type
 
     def set_params(self,params):
         self.params = params

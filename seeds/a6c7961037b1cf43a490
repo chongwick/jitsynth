@@ -1,0 +1,13 @@
+<?php
+$host = "localhost\0.example.com";
+try {
+	var_dump(gethostbyname($host));
+} catch(Error $e) {
+	print $e->getMessage()."\n";
+}
+try {
+var_dump(gethostbynamel($host));
+} catch(Error $e) {
+	print $e->getMessage()."\n";
+}
+?>

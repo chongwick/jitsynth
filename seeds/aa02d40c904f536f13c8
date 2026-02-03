@@ -1,0 +1,7 @@
+<?php
+function foo() {
+  var_dump($i=1);
+  return $i;
+}
+var_dump(foo());
+?>

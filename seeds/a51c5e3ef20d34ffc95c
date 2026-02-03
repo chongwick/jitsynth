@@ -1,0 +1,8 @@
+<?php
+$dsn = 'sqlite:./bug64705NonExistingDir/bug64705NonExistingDb';
+try {
+  $pdo = new \PDO($dsn, null, null);
+} catch (\PDOException $e) {
+  var_dump(!empty($e->errorInfo) && is_array($e->errorInfo));
+}
+?>

@@ -1,0 +1,7 @@
+<?php
+$var = -PHP_INT_MAX - 1;
+try {
+	range($var,1,$var);
+} catch (\ValueError $e) {
+	echo $e->getMessage() . PHP_EOL;
+}

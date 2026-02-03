@@ -1,0 +1,18 @@
+<?php
+trait T {
+	function foo() {
+		return reset($this->a);
+	}
+}
+class C {
+	use T;
+	private array $a = [1];
+}
+$o = new C;
+$o->foo();
+unset($o);
+$o = new C;
+$o->foo();
+unset($o);
+?>
+DONE

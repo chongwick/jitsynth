@@ -1,0 +1,7 @@
+<?php
+
+$re = new ReflectionExtension("hash");
+var_dump($re->getConstants());
+
+var_dump(mhash(133, 1086849124, 133));
+?>
