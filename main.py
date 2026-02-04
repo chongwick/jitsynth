@@ -42,14 +42,15 @@ def populate_map(seeds):
                 if graph_name not in component_map[node_type]:
                     component_map[node_type].append(graph_name)
 
-        for env in seq.output_all_envs():
-            if env.flow_type not in component_map:
-                component_map[env.flow_type] = [graph_name]
+        for env_type in seq.output_env_buckets():
+            if env_type not in component_map:
+                component_map[env_type] = [graph_name]
             else:
-                if graph_name not in component_map[env.flow_type]:
-                    component_map[env.flow_type].append(graph_name)
+                if graph_name not in component_map[env_type]:
+                    component_map[env_type].append(graph_name)
 
         _write_component_map(component_map)
+    quit()
 
 def print_constraint(constraint,depth=0):
     for comp in constraint:
@@ -58,35 +59,34 @@ def print_constraint(constraint,depth=0):
         else:
             print("\t"*depth,type(comp),comp.comp_type)
 
-def apply_constraint(constraint,component_map):
-    new_seq = Seq()
-    for comp in constraint: #first one is a formality
-        if isinstance(comp,list):
-            apply_constraint(comp,component_map)
-        else:
-            print(comp.comp_type)
-            node = None
-            if comp.comp_type == "func":
-                env = choice(component_map['function'])
-                with open(env,"rb") as f:
-                    pickle.load(f)
-                for i in env.output_all_envs:
-                    if i.flow_type == "function":
-                        node = i
-                        break
-                print(node);quit()
-            elif comp.comp_type == "for":
-                env = choice(component_map['for'])
-                with open(env,"rb") as f:
-                    pickle.load(f)
-                for i in env.output_all_envs:
-                    if i.flow_type == "for":
-                        node = i
-                        break
+def apply_constraint(constraint,component_map,seq):
 
-            if node != None:
-                new_seq.set_node(node=node)
-    #return new_seq
+    def _get_seq(c):
+        if c.comp_type == "main":
+            return seq
+        elif c.comp_type == "func":
+            seq_file = choice(component_map['function'])
+            with open(seq_file,"rb") as f:
+                full_seq = pickle.load(f)
+            func_seq = choice(full_seq.output_env_buckets()['function'])
+            return func_seq
+        else:
+            seq_file = choice(component_map[c.comp_type])
+            with open(seq_file,"rb") as f:
+                full_seq = pickle.load(f)
+            flow_seq = choice(full_seq.output_env_buckets()[c.comp_type])
+            return flow_seq
+
+    if isinstance(constraint,list):
+        tmp_seq = _get_seq(constraint[0])
+        if constraint[0].comp_type == "func":
+            seq.children_envs["Function"][tmp_seq.func_name] = tmp_seq
+        elif constraint[0].comp_type != "main":
+            seq.set_node(node=tmp_seq)
+        for c in constraint[1:]:
+            apply_constraint(c,component_map,tmp_seq)
+    else:
+        return
 
 def main():
     constraints = ["constraints/" + i for i in os.listdir("constraints")]
@@ -99,7 +99,11 @@ def main():
     #populate_map(seeds)
     component_map = _load_component_map()
     print_constraint(constraint)
-    apply_constraint(constraint,component_map)
+    seq = Seq()
+    apply_constraint(constraint,component_map,seq)
+    h = []
+    seq.output_env(h)
+    print("\n".join(h))
 
 
 if __name__ == "__main__":

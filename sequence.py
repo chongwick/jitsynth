@@ -12,7 +12,7 @@ class Seq: #ControlTree
 
         # This is for selecting a node to swap
         self.all_nodes = [] # This is only relevant for the topmost environment
-        self.all_envs = [] # This is only relevant for the topmost environment
+        self.env_buckets = {} # This is only relevant for the topmost environment
 
         ###
         # Dependencies are protected relations
@@ -35,15 +35,11 @@ class Seq: #ControlTree
         self.defined_classes = {}
         self.defined_objects = {}
 
-    #These are functions only to be called by the top environment
+#These are functions only to be called by the top environment---------------
     #Every time a node is created, this has to be used
     def check_in(self,node): 
         if self.parent_env == None:
             self.all_nodes.append(node)
-
-    def check_in_env(self,env):
-        if self.parent_env == None:
-            self.all_envs.append(env)
 
     def get_rel_db(self):
         #return self.relational_database
@@ -61,7 +57,17 @@ class Seq: #ControlTree
         self.relational_database.append(value)
         return len(self.relational_database)-1
 
-    #Everything else can be used by other environments
+#Everything else can be used by other environments--------------------------
+
+    def _add_env(self,env_to_add):
+        env = self
+        while env.parent_env != None:
+            env = env.parent_env
+        if env_to_add.flow_type in env.env_buckets:
+            env.env_buckets[env_to_add.flow_type].append(env_to_add)
+        else:
+            env.env_buckets[env_to_add.flow_type] = [env_to_add]
+        return
 
     def get_env_type(self):
         return type(self)
@@ -114,9 +120,11 @@ class Seq: #ControlTree
         # A function definition spawns a new environment and does not inherit the nodes
         if env_type == "Function":
             new_env = FunctionBranch(self,self.relational_database,name,{})
+            self._add_env(new_env)
             self.children_envs[env_type][name] = new_env
         elif env_type == "Flow":
             new_env = FlowBranch(self,self.relational_database,self.node_env.copy(),flow_type)
+            self._add_env(new_env)
             #This adds it to the environment for printing
             array_push(self.node_env,new_env)
             #for control flow manipulation
@@ -136,12 +144,12 @@ class Seq: #ControlTree
             env = env.parent_env
         return env.all_nodes
 
-    def output_all_envs(self):
+    def output_env_buckets(self):
         #return self.all_nodes
         env = self
         while env.parent_env != None:
             env = env.parent_env
-        return env.all_envs
+        return env.env_buckets
 
     # An annoyingingly necessary function because of the way
     # function nodes were implemented

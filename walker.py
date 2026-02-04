@@ -314,7 +314,6 @@ class Walker():
         # the environment. easy peasy. -lebron james
         func_name = node['name']['name']
         func_env = env.spawn_env("Function",func_name)
-        self.master.check_in_env(func_env)
         func_params = {}
         if node['params'] != None:
             for p in node['params']:
@@ -447,7 +446,6 @@ class Walker():
     def eval_Stmt_While(self,node,env,class_id):
         cond = self.eval_node(node['cond'],env)
         tmp_env = env.spawn_env("Flow",flow_type="while")
-        self.master.check_in_env(tmp_env)
         tmp_env.set_condition(cond,cond.get_name())
         for stmt in node['stmts']:
             self.eval_node(stmt,tmp_env)
@@ -456,7 +454,6 @@ class Walker():
     def eval_Stmt_If(self,node,env,class_id):
         cond = self.eval_node(node['cond'], env)
         tmp_env = env.spawn_env("Flow",flow_type="if")
-        self.master.check_in_env(tmp_env)
         tmp_env.set_condition(cond,cond.get_name())
         if node['elseifs'] != None:
             for stmt in node['elseifs']:
@@ -474,7 +471,6 @@ class Walker():
     def eval_Stmt_ElseIf(self,node,env,class_id):
         cond = self.eval_node(node['cond'],env)
         tmp_env = env.spawn_env("Flow",flow_type="elseif")
-        self.master.check_in_env(tmp_env)
         tmp_env.set_condition(cond,cond.get_name())
         for stmt in node['stmts']:
             self.eval_node(stmt,tmp_env)
@@ -482,14 +478,12 @@ class Walker():
 
     def eval_Stmt_Else(self,node,env,class_id):
         tmp_env = env.spawn_env("Flow",flow_type="else")
-        self.master.check_in_env(tmp_env)
         for stmt in node['stmts']:
             self.eval_node(stmt,tmp_env)
         return
 
     def eval_Stmt_TryCatch(self,node,env,class_id):
         tmp_env = env.spawn_env("Flow",flow_type="try")
-        self.master.check_in_env(tmp_env)
         for stmt in node['catches']:
             self.eval_node(stmt,env)
         if node['finally'] != None:
@@ -502,7 +496,6 @@ class Walker():
         types = [i['name'] for i in node['types']]
         var = node['var']['name']
         tmp_env = env.spawn_env("Flow",flow_type="catch")
-        self.master.check_in_env(tmp_env)
         tmp_env.set_catch_types_var(types,var)
         for stmt in node['stmts']:
             self.eval_node(stmt,tmp_env)
@@ -516,19 +509,16 @@ class Walker():
         cond = self.eval_node(node['cond'],env)
         conditions.append(cond)
         switch_env = env.spawn_env("Flow",flow_type="switch")
-        self.master.check_in_env(switch_env)
         #wait to do this until the end when all conditions are collected
         #switch_env.set_condition(cond,cond.get_name())
         for case in node['cases']:
             case_env = None
             if case['cond'] != None:
                 case_env = switch_env.spawn_env("Flow",flow_type="case")
-                self.master.check_in_env(case_env)
                 case_cond = self.eval_node(case['cond'],env)
                 conditions.append(case_cond)
             else:
                 case_env = switch_env.spawn_env("Flow",flow_type="case_default")
-                self.master.check_in_env(case_env)
             case_env.set_condition(None,case_cond.get_name())
             for stmt in case['stmts']:
                 #we should evaluate statements in parent environment scope but whateever
@@ -541,7 +531,6 @@ class Walker():
         # This covers the basics
         cond = self.eval_node(node["expr"],env)
         tmp_env = env.spawn_env("Flow",flow_type="foreach")
-        self.master.check_in_env(tmp_env)
         tmp_env.set_condition(cond,cond.get_name())
         for_var = node['valueVar']['name']
         by_ref = node['byRef']
@@ -560,7 +549,6 @@ class Walker():
         # to quit.
     def eval_Stmt_For(self,node,env,class_id):
         tmp_env = env.spawn_env("Flow",flow_type="for")
-        self.master.check_in_env(tmp_env)
         self.eval_node(node["init"][0],tmp_env) # we at least need to evaluate the var
         for_var_name = node['init'][0]['var']['name']
         tmp_env.set_for_var(for_var_name)
@@ -585,7 +573,6 @@ class Walker():
 
     def eval_Stmt_Finally(self,node,env,class_id):
         tmp_env = env.spawn_env("Flow",flow_type="finally")
-        self.master.check_in_env(tmp_env)
         for stmt in node['stmts']:
             self.eval_node(stmt,tmp_env)
         return
