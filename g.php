@@ -1,4 +1,8 @@
 <?php
+function foo($n) {
+        return 3;
+}
+
 $h = 14 <=> 2;
 $n = 2; 
 $g = $h + $n;
@@ -8,4 +12,5 @@ if($h > 2){
                 $h = 23;
         }
 }
+foo($g);
 echo $h;

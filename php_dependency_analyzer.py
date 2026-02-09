@@ -338,6 +338,8 @@ def build_statement_dependencies(ast):
         attrs = stmt.get("attributes", {})
         start_line = attrs.get("startLine", -1)
         end_line = attrs.get("endLine", -1)
+        start_file_pos = attrs.get("startFilePos")
+        end_file_pos = attrs.get("endFilePos")
 
         defs = collect_defs(stmt)
         uses = get_statement_uses(stmt)
@@ -357,6 +359,8 @@ def build_statement_dependencies(ast):
             "node_type": node_type,
             "start_line": start_line,
             "end_line": end_line,
+            "start_file_pos": start_file_pos,
+            "end_file_pos": end_file_pos,
             "defs": defs,
             "uses": uses,
             "depends_on": depends_on,
@@ -390,10 +394,56 @@ def get_dependency_closure(results, stmt_id):
 
 
 # ---------------------------------------------------------------------------
-# 6. Pretty printing
+# 6. Source text extraction via byte offsets
 # ---------------------------------------------------------------------------
 
-def print_analysis(results):
+def get_source_slice(results, stmt_id, source):
+    """
+    Extract the exact source text for a statement using byte offsets.
+
+    Args:
+        results: list of result dicts from build_statement_dependencies()
+        stmt_id: the statement index
+        source: the raw PHP file contents as a string
+
+    Returns:
+        The source text for the statement, or None if positions are unavailable.
+    """
+    r = results[stmt_id]
+    start = r.get("start_file_pos")
+    end = r.get("end_file_pos")
+    if start is None or end is None:
+        return None
+    return source[start:end + 1]
+
+
+def get_dependency_slice(results, stmt_id, source):
+    """
+    Get the concatenated source text for a statement and all its dependencies.
+
+    Args:
+        results: list of result dicts from build_statement_dependencies()
+        stmt_id: the statement index
+        source: the raw PHP file contents as a string
+
+    Returns:
+        A string with the source text of all required statements (in order),
+        separated by newlines.
+    """
+    closure = get_dependency_closure(results, stmt_id)
+    slices = []
+    for sid in closure:
+        text = get_source_slice(results, sid, source)
+        if text is not None:
+            slices.append(text)
+    return "\n".join(slices)
+
+
+# ---------------------------------------------------------------------------
+# 7. Pretty printing
+# ---------------------------------------------------------------------------
+
+def print_analysis(results, source=None):
     """Print the dependency analysis in a readable format."""
     print("=" * 60)
     print("PHP Statement Dependency Analysis")
@@ -402,6 +452,10 @@ def print_analysis(results):
     for r in results:
         print(f"\nStatement {r['stmt_id']} (line {r['start_line']}-{r['end_line']})")
         print(f"  Type:       {r['node_type']}")
+        if source is not None:
+            text = get_source_slice(results, r['stmt_id'], source)
+            if text is not None:
+                print(f"  Source:     {text.strip()}")
         print(f"  Defines:    {sorted(r['defs']) if r['defs'] else '(none)'}")
         print(f"  Uses:       {sorted(r['uses']) if r['uses'] else '(none)'}")
         print(f"  Depends on: {sorted(r['depends_on']) if r['depends_on'] else '(none)'}")
@@ -415,10 +469,13 @@ def print_analysis(results):
         if len(closure) > 1:
             print(f"\n  To print statement {r['stmt_id']} (line {r['start_line']}), "
                   f"also include: {[s for s in closure if s != r['stmt_id']]}")
+            if source is not None:
+                dep_text = get_dependency_slice(results, r['stmt_id'], source)
+                print(f"  Full slice:\n    {dep_text.replace(chr(10), chr(10) + '    ')}")
 
 
 # ---------------------------------------------------------------------------
-# 7. Main
+# 8. Main
 # ---------------------------------------------------------------------------
 
 def main():
@@ -494,8 +551,10 @@ def main():
             ast = json.loads(stdout)
         except Exception as e:
             print(e);quit()
+        with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
+            source = f.read()
         results = build_statement_dependencies(ast)
-        print_analysis(results)
+        print_analysis(results, source)
 
 
 if __name__ == "__main__":
