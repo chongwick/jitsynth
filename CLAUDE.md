@@ -84,7 +84,7 @@ closure = get_dependency_closure(results, 5)
 
 ## Extending
 
-**Add CFG awareness**: Introduce basic blocks, track multiple reaching definitions per variable at join points.
+**Add CFG awareness**: Introduce basic blocks, track multiple reaching definitions per variable at join points, analyze the dependencies inside of control/object regions (if statements, functions, classes, etc.).
 
 **Add scope boundaries**: Reset `last_def` at function/class boundaries, or maintain a scope stack.
 

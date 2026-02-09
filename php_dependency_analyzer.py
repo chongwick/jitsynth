@@ -66,6 +66,16 @@ INCREMENT_TYPES = {
     "Expr_PostDec",
 }
 
+CONTROL_FLOW_TYPES = {
+    "Stmt_If", "Stmt_While", "Stmt_Do", "Stmt_For",
+    "Stmt_Foreach", "Stmt_Switch", "Stmt_TryCatch",
+}
+
+SCOPE_TYPES = {
+    "Stmt_Function", "Stmt_ClassMethod",
+    "Stmt_Class", "Stmt_Trait", "Stmt_Interface",
+}
+
 
 def get_variable_name(node):
     """
@@ -164,6 +174,24 @@ def collect_defs(stmt):
                 name = get_variable_name(var)
                 if name:
                     defs.add(name)
+
+    # Stmt_Catch defines the catch variable (e.g. $e in catch(Exception $e))
+    elif node_type == "Stmt_Catch":
+        var = stmt.get("var")
+        if var:
+            name = get_variable_name(var)
+            if name:
+                defs.add(name)
+
+    # Function/method params are definitions in the function scope
+    elif node_type in ("Stmt_Function", "Stmt_ClassMethod"):
+        for param in stmt.get("params", []):
+            if isinstance(param, dict):
+                var = param.get("var")
+                if var:
+                    name = get_variable_name(var)
+                    if name:
+                        defs.add(name)
 
     return defs
 
@@ -310,6 +338,215 @@ def _get_expr_uses(expr):
 
 
 # ---------------------------------------------------------------------------
+# 3b. AST flattener — linearize nested control-flow statements
+# ---------------------------------------------------------------------------
+
+def flatten_ast(ast):
+    """
+    Flatten a top-level AST (list of statements) so that statements nested
+    inside control-flow constructs and scope boundaries (functions, classes,
+    methods, traits, interfaces) each get their own entry in the resulting
+    list.  Each construct is replaced by a *region header* (carrying just
+    the condition / header expressions) followed by the recursively-flattened
+    body statements.
+
+    Returns a list of statement dicts, each annotated with a ``_region``
+    metadata dict.
+    """
+    result = []
+    _flatten_stmts(ast, result, parent_index=None, depth=0,
+                   region_type=None, branch=None)
+    return result
+
+
+def _flatten_stmts(stmts, result, parent_index, depth, region_type, branch):
+    """Recursively flatten a list of statements into *result*."""
+    if not stmts:
+        return
+    for stmt in stmts:
+        if not isinstance(stmt, dict):
+            continue
+        node_type = stmt.get("nodeType", "")
+
+        if node_type in CONTROL_FLOW_TYPES:
+            _flatten_control_flow(stmt, node_type, result, parent_index,
+                                  depth, region_type, branch)
+        elif node_type in SCOPE_TYPES:
+            _flatten_scope(stmt, node_type, result, parent_index,
+                           depth, region_type, branch)
+        else:
+            result.append(_with_region(stmt, parent_index, depth,
+                                       region_type, branch))
+
+
+def _flatten_control_flow(stmt, node_type, result, parent_index, depth,
+                          region_type, branch):
+    """Emit a region header + recursively flattened bodies for one
+    control-flow statement."""
+
+    # --- Region header ---
+    header = _make_region_header(stmt, node_type, parent_index, depth)
+    header_index = len(result)
+    result.append(header)
+
+    child_depth = depth + 1
+
+    if node_type == "Stmt_If":
+        # if body
+        _flatten_stmts(stmt.get("stmts", []), result, header_index,
+                       child_depth, "Stmt_If", "if_body")
+        # elseifs
+        for elseif in stmt.get("elseifs", []):
+            ei_header = _make_region_header(elseif, "Stmt_ElseIf",
+                                            header_index, child_depth)
+            ei_index = len(result)
+            result.append(ei_header)
+            _flatten_stmts(elseif.get("stmts", []), result, ei_index,
+                           child_depth + 1, "Stmt_ElseIf", "elseif_body")
+        # else
+        else_clause = stmt.get("else")
+        if else_clause and isinstance(else_clause, dict):
+            _flatten_stmts(else_clause.get("stmts", []), result,
+                           header_index, child_depth, "Stmt_If", "else_body")
+
+    elif node_type in ("Stmt_While", "Stmt_Do"):
+        _flatten_stmts(stmt.get("stmts", []), result, header_index,
+                       child_depth, node_type, "body")
+
+    elif node_type == "Stmt_For":
+        _flatten_stmts(stmt.get("stmts", []), result, header_index,
+                       child_depth, "Stmt_For", "body")
+
+    elif node_type == "Stmt_Foreach":
+        _flatten_stmts(stmt.get("stmts", []), result, header_index,
+                       child_depth, "Stmt_Foreach", "body")
+
+    elif node_type == "Stmt_Switch":
+        for case in stmt.get("cases", []):
+            _flatten_stmts(case.get("stmts", []) if isinstance(case, dict) else [],
+                           result, header_index, child_depth,
+                           "Stmt_Switch", "case_body")
+
+    elif node_type == "Stmt_TryCatch":
+        # try body
+        _flatten_stmts(stmt.get("stmts", []), result, header_index,
+                       child_depth, "Stmt_TryCatch", "try_body")
+        # catches
+        for catch in stmt.get("catches", []):
+            if not isinstance(catch, dict):
+                continue
+            catch_header = _make_region_header(catch, "Stmt_Catch",
+                                               header_index, child_depth)
+            catch_index = len(result)
+            result.append(catch_header)
+            _flatten_stmts(catch.get("stmts", []), result, catch_index,
+                           child_depth + 1, "Stmt_Catch", "catch_body")
+        # finally
+        finally_clause = stmt.get("finally")
+        if finally_clause and isinstance(finally_clause, dict):
+            _flatten_stmts(finally_clause.get("stmts", []), result,
+                           header_index, child_depth, "Stmt_TryCatch",
+                           "finally_body")
+
+
+def _flatten_scope(stmt, node_type, result, parent_index, depth,
+                   region_type, branch):
+    """Emit a region header + recursively flattened body for a scope
+    boundary (function, method, class, trait, interface)."""
+
+    header = _make_region_header(stmt, node_type, parent_index, depth)
+    header_index = len(result)
+    result.append(header)
+
+    child_depth = depth + 1
+
+    if node_type in ("Stmt_Function", "Stmt_ClassMethod"):
+        _flatten_stmts(stmt.get("stmts", []), result, header_index,
+                       child_depth, node_type, "body")
+
+    elif node_type in ("Stmt_Class", "Stmt_Trait", "Stmt_Interface"):
+        _flatten_stmts(stmt.get("stmts", []), result, header_index,
+                       child_depth, node_type, "body")
+
+
+def _make_region_header(stmt, node_type, parent_index, depth):
+    """
+    Build a synthetic region-header node from a control-flow statement.
+
+    Copies only the fields needed for def/use analysis (condition, loop
+    expressions, etc.) — body fields (stmts, elseifs, else, cases, catches,
+    finally) are deliberately omitted so that collect_uses/collect_defs only
+    see the header portion.
+    """
+    header = {
+        "nodeType": node_type,
+        "attributes": dict(stmt.get("attributes", {})),
+        "_is_region_header": True,
+    }
+
+    if node_type in ("Stmt_If", "Stmt_ElseIf", "Stmt_While", "Stmt_Do"):
+        cond = stmt.get("cond")
+        if cond is not None:
+            header["cond"] = cond
+
+    elif node_type == "Stmt_For":
+        for key in ("init", "cond", "loop"):
+            val = stmt.get(key)
+            if val is not None:
+                header[key] = val
+
+    elif node_type == "Stmt_Foreach":
+        for key in ("expr", "valueVar", "keyVar", "byRef"):
+            val = stmt.get(key)
+            if val is not None:
+                header[key] = val
+
+    elif node_type == "Stmt_Switch":
+        cond = stmt.get("cond")
+        if cond is not None:
+            header["cond"] = cond
+
+    elif node_type == "Stmt_TryCatch":
+        pass  # try has no condition
+
+    elif node_type == "Stmt_Catch":
+        # Copy the catch variable so collect_defs can extract it
+        var = stmt.get("var")
+        if var is not None:
+            header["var"] = var
+        types = stmt.get("types")
+        if types is not None:
+            header["types"] = types
+
+    elif node_type in ("Stmt_Function", "Stmt_ClassMethod"):
+        # Copy name and params (for structural refs and param defs)
+        for key in ("name", "params", "returnType", "byRef"):
+            val = stmt.get(key)
+            if val is not None:
+                header[key] = val
+
+    elif node_type in ("Stmt_Class", "Stmt_Trait", "Stmt_Interface"):
+        # Copy name, extends, implements (for structural refs)
+        for key in ("name", "extends", "implements", "flags"):
+            val = stmt.get(key)
+            if val is not None:
+                header[key] = val
+
+    return _with_region(header, parent_index, depth, node_type, "header")
+
+
+def _with_region(stmt, parent_index, depth, region_type, branch):
+    """Attach ``_region`` metadata to a statement dict and return it."""
+    stmt["_region"] = {
+        "parent_index": parent_index,
+        "depth": depth,
+        "region_type": region_type,
+        "branch": branch,
+    }
+    return stmt
+
+
+# ---------------------------------------------------------------------------
 # 4. Structural dependency helpers (function/class/trait/interface)
 # ---------------------------------------------------------------------------
 
@@ -402,16 +639,22 @@ def describe_statement(stmt):
     """
     Return a descriptive node type for a statement.
     For Stmt_Expression, returns the inner expression's nodeType instead.
+    For region headers, appends "(region)" to the description.
     For all other statements, returns the statement's nodeType as-is.
     """
     node_type = stmt.get("nodeType", "unknown")
+    is_header = stmt.get("_is_region_header", False)
 
     if node_type == "Stmt_Expression":
         expr = stmt.get("expr")
         if expr:
-            return expr.get("nodeType", "unknown")
+            desc = expr.get("nodeType", "unknown")
+            return f"{desc} (region)" if is_header else desc
 
-    return node_type
+    desc = node_type
+    if is_header:
+        desc = f"{desc} (region)"
+    return desc
 
 
 # ---------------------------------------------------------------------------
@@ -434,12 +677,15 @@ def build_statement_dependencies(ast):
             - defs: set of variable names defined
             - uses: set of variable names used
             - depends_on: set of stmt_ids this statement depends on
+            - region: dict with parent_index, depth, region_type, branch
+            - is_region_header: bool
     """
+    flat_ast = flatten_ast(ast)
     last_def = {}   # variable name -> stmt_id of last definition
-    name_registry = build_name_registry(ast)
+    name_registry = build_name_registry(flat_ast)
     results = []
 
-    for stmt_id, stmt in enumerate(ast):
+    for stmt_id, stmt in enumerate(flat_ast):
         node_type = stmt.get("nodeType", "unknown")
         attrs = stmt.get("attributes", {})
         start_line = attrs.get("startLine", -1)
@@ -469,6 +715,8 @@ def build_statement_dependencies(ast):
             last_def[var] = stmt_id
 
         description = describe_statement(stmt)
+        is_region_header = bool(stmt.get("_is_region_header"))
+        region = stmt.get("_region", {})
 
         results.append({
             "stmt_id": stmt_id,
@@ -482,6 +730,8 @@ def build_statement_dependencies(ast):
             "uses": uses,
             "structural_refs": structural_refs,
             "depends_on": depends_on,
+            "region": region,
+            "is_region_header": is_region_header,
         })
 
     return results
@@ -576,16 +826,23 @@ def print_analysis(results, source=None):
     print("=" * 60)
 
     for r in results:
-        print(f"\nStatement {r['stmt_id']} (line {r['start_line']}-{r['end_line']})")
-        print(f"  Type:       {r['node_type']}  ->  {r['description']}")
+        region = r.get("region", {})
+        depth = region.get("depth", 0)
+        indent = "  " + "| " * depth
+        header_marker = " [REGION]" if r.get("is_region_header") else ""
+        print(f"\n{indent}Statement {r['stmt_id']} (line {r['start_line']}-{r['end_line']}){header_marker}")
+        print(f"{indent}  Type:       {r['node_type']}  ->  {r['description']}")
         if source is not None:
             text = get_source_slice(results, r['stmt_id'], source)
             if text is not None:
-                print(f"  Source:     {text.strip()}")
-        print(f"  Defines:    {sorted(r['defs']) if r['defs'] else '(none)'}")
-        print(f"  Uses:       {sorted(r['uses']) if r['uses'] else '(none)'}")
-        print(f"  Struct refs:{' ' + sorted(r['structural_refs']).__repr__() if r.get('structural_refs') else ' (none)'}")
-        print(f"  Depends on: {sorted(r['depends_on']) if r['depends_on'] else '(none)'}")
+                print(f"{indent}  Source:     {text.strip()}")
+        print(f"{indent}  Defines:    {sorted(r['defs']) if r['defs'] else '(none)'}")
+        print(f"{indent}  Uses:       {sorted(r['uses']) if r['uses'] else '(none)'}")
+        print(f"{indent}  Struct refs:{' ' + sorted(r['structural_refs']).__repr__() if r.get('structural_refs') else ' (none)'}")
+        print(f"{indent}  Depends on: {sorted(r['depends_on']) if r['depends_on'] else '(none)'}")
+        if region.get("parent_index") is not None:
+            print(f"{indent}  Region:     parent={region['parent_index']}, "
+                  f"type={region.get('region_type')}, branch={region.get('branch')}")
 
     print("\n" + "=" * 60)
     print("Dependency Closures (what to print with each statement)")

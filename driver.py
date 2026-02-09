@@ -16,7 +16,7 @@ def profile_script(script_results):
     return profile_buckets
 
 def analyze_corpus(input_dir,output_dir):
-    for seed in os.path.join(input_dir,os.listdir(input_dir)):
+    for seed in [os.path.join(input_dir,i) for i in os.listdir(input_dir)]:
         with open(seed, "r", encoding="utf-8", errors="ignore") as f:
             source = f.read()
         results = build_statement_dependencies(_build_ast(seed))
