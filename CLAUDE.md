@@ -84,9 +84,7 @@ closure = get_dependency_closure(results, 5)
 
 ## Extending
 
-**Source text mapping**: Use `startFilePos`/`endFilePos` attributes to extract original PHP source for each statement, enabling automatic slice printing.
-
-**Add Structural Dependencies**: a functional call foo() should also point to its definition.
+**Add Structural Dependencies**: a function call foo() should also point to its definition. A call refering to a class should point to its class definition. A class definition using a trait should point to the trait.
 
 **Add CFG awareness**: Introduce basic blocks, track multiple reaching definitions per variable at join points.
 

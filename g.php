@@ -1,16 +1,27 @@
 <?php
-function foo($n) {
-        return 3;
+
+// Define the Car class
+class Car {
+    // Properties (variables)
+    public $brand;
+    public $model;
+
+    // Constructor method, called when a new object is created
+    public function __construct($brand, $model) {
+        $this->brand = $brand;
+        $this->model = $model;
+    }
+
+    // Method (function) to display car details
+    public function displayInfo() {
+        echo "This car is a {$this->brand} {$this->model}.";
+    }
 }
 
-$h = 14 <=> 2;
-$n = 2; 
-$g = $h + $n;
-$h = $g;
-if($h > 2){
-        if($g < 3){
-                $h = 23;
-        }
-}
-foo($g);
-echo $h;
+// Create an object (instance) of the Car class
+$myCar = new Car("Toyota", "Corolla");
+
+// Call a method on the object to display its information
+$myCar->displayInfo();
+
+?>

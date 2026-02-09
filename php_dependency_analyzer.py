@@ -310,7 +310,92 @@ def _get_expr_uses(expr):
 
 
 # ---------------------------------------------------------------------------
-# 4. Dependency graph builder
+# 4. Structural dependency helpers (function/class/trait/interface)
+# ---------------------------------------------------------------------------
+
+def build_name_registry(ast):
+    """Map function/class/trait/interface names to their defining stmt_id."""
+    registry = {}  # name_string -> stmt_id
+    for stmt_id, stmt in enumerate(ast):
+        node_type = stmt.get("nodeType")
+        if node_type in ("Stmt_Function", "Stmt_Class", "Stmt_Trait", "Stmt_Interface"):
+            name_node = stmt.get("name")
+            if isinstance(name_node, dict):
+                name = name_node.get("name")
+            elif isinstance(name_node, str):
+                name = name_node
+            else:
+                name = None
+            if name:
+                registry[name] = stmt_id
+    return registry
+
+
+def _extract_name(node):
+    """Extract a name string from a Name node (handles both 'name' field and 'parts' array)."""
+    if not isinstance(node, dict):
+        return None
+    if node.get("nodeType") == "Name":
+        # Try 'name' field first (simple name), then 'parts' for namespaced
+        name = node.get("name")
+        if isinstance(name, str):
+            return name
+        parts = node.get("parts")
+        if isinstance(parts, list) and parts:
+            return "\\".join(parts)
+    return None
+
+
+def collect_structural_refs(stmt):
+    """
+    Walk a statement's subtree and return a set of name strings that are
+    structurally referenced (function calls, class instantiation, static calls,
+    trait uses, extends, implements).
+    """
+    refs = set()
+
+    # Top-level class extends/implements (these are direct children, not nested)
+    node_type = stmt.get("nodeType")
+    if node_type == "Stmt_Class":
+        extends = stmt.get("extends")
+        if extends:
+            name = _extract_name(extends)
+            if name:
+                refs.add(name)
+        for iface in stmt.get("implements", []):
+            name = _extract_name(iface)
+            if name:
+                refs.add(name)
+
+    for node in walk(stmt):
+        nt = node.get("nodeType")
+
+        if nt == "Expr_FuncCall":
+            name = _extract_name(node.get("name"))
+            if name:
+                refs.add(name)
+
+        elif nt == "Expr_New":
+            name = _extract_name(node.get("class"))
+            if name:
+                refs.add(name)
+
+        elif nt == "Expr_StaticCall":
+            name = _extract_name(node.get("class"))
+            if name:
+                refs.add(name)
+
+        elif nt == "Stmt_TraitUse":
+            for trait in node.get("traits", []):
+                name = _extract_name(trait)
+                if name:
+                    refs.add(name)
+
+    return refs
+
+
+# ---------------------------------------------------------------------------
+# 5. Dependency graph builder
 # ---------------------------------------------------------------------------
 
 def build_statement_dependencies(ast):
@@ -331,6 +416,7 @@ def build_statement_dependencies(ast):
             - depends_on: set of stmt_ids this statement depends on
     """
     last_def = {}   # variable name -> stmt_id of last definition
+    name_registry = build_name_registry(ast)
     results = []
 
     for stmt_id, stmt in enumerate(ast):
@@ -350,6 +436,14 @@ def build_statement_dependencies(ast):
             if var in last_def:
                 depends_on.add(last_def[var])
 
+        # Structural dependencies: function/class/trait/interface references
+        structural_refs = collect_structural_refs(stmt)
+        for ref_name in structural_refs:
+            if ref_name in name_registry:
+                dep_id = name_registry[ref_name]
+                if dep_id != stmt_id:  # don't depend on yourself
+                    depends_on.add(dep_id)
+
         # Update last-def map
         for var in defs:
             last_def[var] = stmt_id
@@ -363,6 +457,7 @@ def build_statement_dependencies(ast):
             "end_file_pos": end_file_pos,
             "defs": defs,
             "uses": uses,
+            "structural_refs": structural_refs,
             "depends_on": depends_on,
         })
 
@@ -370,7 +465,7 @@ def build_statement_dependencies(ast):
 
 
 # ---------------------------------------------------------------------------
-# 5. Dependency closure (for printing a statement with all its deps)
+# 6. Dependency closure (for printing a statement with all its deps)
 # ---------------------------------------------------------------------------
 
 def get_dependency_closure(results, stmt_id):
@@ -394,7 +489,7 @@ def get_dependency_closure(results, stmt_id):
 
 
 # ---------------------------------------------------------------------------
-# 6. Source text extraction via byte offsets
+# 7. Source text extraction via byte offsets
 # ---------------------------------------------------------------------------
 
 def get_source_slice(results, stmt_id, source):
@@ -440,7 +535,7 @@ def get_dependency_slice(results, stmt_id, source):
 
 
 # ---------------------------------------------------------------------------
-# 7. Pretty printing
+# 8. Pretty printing
 # ---------------------------------------------------------------------------
 
 def print_analysis(results, source=None):
@@ -458,6 +553,7 @@ def print_analysis(results, source=None):
                 print(f"  Source:     {text.strip()}")
         print(f"  Defines:    {sorted(r['defs']) if r['defs'] else '(none)'}")
         print(f"  Uses:       {sorted(r['uses']) if r['uses'] else '(none)'}")
+        print(f"  Struct refs:{' ' + sorted(r['structural_refs']).__repr__() if r.get('structural_refs') else ' (none)'}")
         print(f"  Depends on: {sorted(r['depends_on']) if r['depends_on'] else '(none)'}")
 
     print("\n" + "=" * 60)
@@ -475,7 +571,7 @@ def print_analysis(results, source=None):
 
 
 # ---------------------------------------------------------------------------
-# 8. Main
+# 9. Main
 # ---------------------------------------------------------------------------
 
 def main():
