@@ -395,7 +395,27 @@ def collect_structural_refs(stmt):
 
 
 # ---------------------------------------------------------------------------
-# 5. Dependency graph builder
+# 5. Statement description
+# ---------------------------------------------------------------------------
+
+def describe_statement(stmt):
+    """
+    Return a descriptive node type for a statement.
+    For Stmt_Expression, returns the inner expression's nodeType instead.
+    For all other statements, returns the statement's nodeType as-is.
+    """
+    node_type = stmt.get("nodeType", "unknown")
+
+    if node_type == "Stmt_Expression":
+        expr = stmt.get("expr")
+        if expr:
+            return expr.get("nodeType", "unknown")
+
+    return node_type
+
+
+# ---------------------------------------------------------------------------
+# 6. Dependency graph builder
 # ---------------------------------------------------------------------------
 
 def build_statement_dependencies(ast):
@@ -448,9 +468,12 @@ def build_statement_dependencies(ast):
         for var in defs:
             last_def[var] = stmt_id
 
+        description = describe_statement(stmt)
+
         results.append({
             "stmt_id": stmt_id,
             "node_type": node_type,
+            "description": description,
             "start_line": start_line,
             "end_line": end_line,
             "start_file_pos": start_file_pos,
@@ -546,7 +569,7 @@ def print_analysis(results, source=None):
 
     for r in results:
         print(f"\nStatement {r['stmt_id']} (line {r['start_line']}-{r['end_line']})")
-        print(f"  Type:       {r['node_type']}")
+        print(f"  Type:       {r['node_type']}  ->  {r['description']}")
         if source is not None:
             text = get_source_slice(results, r['stmt_id'], source)
             if text is not None:

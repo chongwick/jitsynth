@@ -3,20 +3,29 @@ import sys
 import subprocess
 import json
 
-target_file = sys.argv[1]
+def profile_script(script_results):
+    for i in script_results:
+        print(f"{i['stmt_id']:3d}  {i['description']}")
 
-with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
-    source = f.read()
+def main():
+    target_file = sys.argv[1]
 
-try:
-    command = ['bash','./php_to_ast.sh',target_file]
-    child = subprocess.Popen(command,stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,text=True)
-    stdout,stderr = child.communicate(timeout=120)
-    child.kill()
-    ast = json.loads(stdout)
-except Exception as e:
-    print(e);quit()
+    with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
+        source = f.read()
 
-results = build_statement_dependencies(ast)
-print(get_dependency_slice(results, 2, source))
+    try:
+        command = ['bash','./php_to_ast.sh',target_file]
+        child = subprocess.Popen(command,stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,text=True)
+        stdout,stderr = child.communicate(timeout=120)
+        child.kill()
+        ast = json.loads(stdout)
+    except Exception as e:
+        print(e);quit()
+
+    results = build_statement_dependencies(ast)
+    profile_script(results)
+    #print(get_dependency_slice(results, 2, source))
+
+if __name__ == "__main__":
+    main()

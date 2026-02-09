@@ -84,8 +84,6 @@ closure = get_dependency_closure(results, 5)
 
 ## Extending
 
-**Add Structural Dependencies**: a function call foo() should also point to its definition. A call refering to a class should point to its class definition. A class definition using a trait should point to the trait.
-
 **Add CFG awareness**: Introduce basic blocks, track multiple reaching definitions per variable at join points.
 
 **Add scope boundaries**: Reset `last_def` at function/class boundaries, or maintain a scope stack.
