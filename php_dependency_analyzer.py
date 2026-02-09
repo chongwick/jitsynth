@@ -562,9 +562,17 @@ def get_dependency_slice(results, stmt_id, source):
 # ---------------------------------------------------------------------------
 
 def print_analysis(results, source=None):
+    whale = """
+        .
+       ":"
+     ___:____     |"\\/"|
+   ,'        `.    \\  /
+   |  O        \\___/  |
+ ~^~^~^~^~^~^~^~^~^~^~^~^~
+ """
     """Print the dependency analysis in a readable format."""
     print("=" * 60)
-    print("PHP Statement Dependency Analysis")
+    print("PHP Statement Dependency Analysis" + whale)
     print("=" * 60)
 
     for r in results:
