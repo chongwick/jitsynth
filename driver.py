@@ -136,6 +136,9 @@ COMP_TO_DESCRIPTIONS = {
 }
 
 
+CORPUS_CACHE_FILE = 'corpus_cache.pkl'
+
+
 def build_corpus_index(seed_dir):
     """Build node_type_index, file_cache, and results_cache from seed corpus.
 
@@ -177,6 +180,47 @@ def build_corpus_index(seed_dir):
                 node_type_index[desc] = [entry]
             else:
                 node_type_index[desc].append(entry)
+    return node_type_index, file_cache, results_cache
+
+
+def save_corpus_cache(seed_dir, node_type_index, file_cache, results_cache):
+    """Pickle the corpus index to disk."""
+    cache_path = os.path.join(seed_dir, CORPUS_CACHE_FILE)
+    with open(cache_path, 'wb') as f:
+        pickle.dump((node_type_index, file_cache, results_cache), f)
+    print(f"Cache saved to {cache_path}")
+
+
+def load_corpus_cache(seed_dir):
+    """Load a previously saved corpus index from disk. Returns None if not found."""
+    cache_path = os.path.join(seed_dir, CORPUS_CACHE_FILE)
+    if not os.path.isfile(cache_path):
+        return None
+    with open(cache_path, 'rb') as f:
+        return pickle.load(f)
+
+
+def get_corpus_index(seed_dir, rebuild=False):
+    """Load corpus index from cache, or build and cache it.
+
+    Args:
+        seed_dir: path to the seed corpus directory
+        rebuild: if True, ignore any existing cache and rebuild from scratch
+    """
+    if not rebuild:
+        cached = load_corpus_cache(seed_dir)
+        if cached is not None:
+            node_type_index, file_cache, results_cache = cached
+            print(f"Loaded cached corpus index from {os.path.join(seed_dir, CORPUS_CACHE_FILE)} "
+                  f"({sum(len(v) for v in node_type_index.values())} statements, "
+                  f"{len(node_type_index)} types, {len(file_cache)} files)")
+            return node_type_index, file_cache, results_cache
+
+    print(f"Building corpus index from {seed_dir}...")
+    node_type_index, file_cache, results_cache = build_corpus_index(seed_dir)
+    print(f"Indexed {sum(len(v) for v in node_type_index.values())} statements "
+          f"across {len(node_type_index)} types from {len(file_cache)} files")
+    save_corpus_cache(seed_dir, node_type_index, file_cache, results_cache)
     return node_type_index, file_cache, results_cache
 
 
@@ -318,6 +362,8 @@ def main():
                         help='Number of scripts to generate per constraint (default: 1)')
     parser.add_argument('--out', metavar='DIR', default='./synth_out',
                         help='Output directory for generated .php files (default: ./synth_out)')
+    parser.add_argument('--rebuild-cache', action='store_true',
+                        help='Force rebuild of the corpus cache even if one exists')
     args = parser.parse_args()
 
     if args.synth:
@@ -330,10 +376,8 @@ def main():
         else:
             pickle_files = [args.synth]
 
-        print(f"Building corpus index from {args.seeds}...")
-        node_type_index, file_cache, results_cache = build_corpus_index(args.seeds)
-        print(f"Indexed {sum(len(v) for v in node_type_index.values())} statements "
-              f"across {len(node_type_index)} types from {len(file_cache)} files")
+        node_type_index, file_cache, results_cache = get_corpus_index(
+            args.seeds, rebuild=args.rebuild_cache)
 
         os.makedirs(args.out, exist_ok=True)
 
