@@ -1,94 +1,140 @@
-# CLAUDE.md — PHP Statement Dependency Analyzer
+# CLAUDE.md — jitsynth
 
 ## What this project does
 
-Analyzes PHP source code at the statement level to build a dependency graph. Each statement knows which prior statements it depends on (via variable def-use chains), so any statement can be printed along with the minimal set of statements required to understand it.
+Synthesizes PHP scripts from JIT-exercising constraint trees. A JOC (JIT Operation Constraint) describes the structural shape of a program — its control flow skeleton and data operations. The synthesizer fills each slot with real PHP source extracted from a seed corpus, producing new PHP scripts that match the constraint's structure.
 
-Input: PHP script
-Output: Per-statement dependency mapping with transitive closure support.
+The dependency analyzer ensures extracted statements include all variable-defining predecessors, avoiding undefined variable errors in the output.
+
+## Project layout
+
+```
+driver.py                    Main entry point (synthesis + profiling CLI)
+php_dependency_analyzer.py   Statement-level dependency graph builder
+php_to_ast.sh                Shell wrapper: PHP file -> JSON AST via nikic/php-parser
+php_helpers/                 PHP parser scripts (uses vendor/autoload.php)
+jc/comps.py                  JOC component classes (ControlComp, DataComp, ObjComp)
+jc/con_out/                  ~497 constraint .pickle files
+seeds/                       ~509 PHP seed scripts (extensionless files)
+synth_out/                   Generated PHP output (created by --synth)
+```
 
 ## Architecture
 
-Single-file Python script (`php_dependency_analyzer.py`), no external dependencies. Pure stdlib (json, sys, subprocess).
+### Two subsystems
 
-### Core pipeline
+1. **Dependency analyzer** (`php_dependency_analyzer.py`) — parses a PHP file's AST, flattens nested control flow into a linear statement list, computes def-use chains, and builds a per-statement dependency graph with transitive closure support.
 
-1. **Walk** — Recursive generator (`walk()`) yields all dict nodes in the AST tree
-2. **Defs** — `collect_defs()` extracts variables written by a statement (assignment targets)
-3. **Uses** — `get_statement_uses()` extracts variables read by a statement, correctly excluding LHS of assignments
+2. **Synthesizer** (`driver.py --synth`) — loads a JOC constraint tree, walks it top-down, and fills each slot with real PHP source from the seed corpus. Control regions get synthetic wrappers (`if`, `for`, `function`, etc.); data operations get randomly selected seed statements with their full dependency closures.
+
+### Dependency analyzer pipeline
+
+1. **Flatten** — `flatten_ast()` linearizes nested control/scope blocks into a flat statement list with region metadata
+2. **Defs** — `collect_defs()` extracts variables written by a statement
+3. **Uses** — `get_statement_uses()` extracts variables read, excluding assignment LHS
 4. **Graph** — `build_statement_dependencies()` single-pass builds `last_def` map and emits per-statement dependency sets
-5. **Closure** — `get_dependency_closure()` computes transitive dependencies for printing
+5. **Closure** — `get_dependency_closure()` computes transitive dependencies; `get_dependency_slice()` returns the source text
 
-### Key design decisions
+### Synthesizer pipeline
 
-- **Symbol keys** are canonicalized strings: `$a`, `$obj->prop`, `Foo::$bar`, `$a[*]` (array access collapses indices)
-- **Assignment LHS exclusion**: In `$g = $h + 2`, `$h` is a use but `$g` is not — this is enforced structurally by skipping the `var` subtree of assignments
-- **Compound assignments** (`+=`, `.=`, etc.) treat the LHS as both a def and a use
-- **Single pass, linear scan** — no CFG. Correct for straight-line code; approximate across branches
+1. **Index** — `build_corpus_index()` parses all seed files, builds three structures:
+   - `node_type_index`: `{ description: [(filepath, stmt_id, start_pos, end_pos), ...] }`
+   - `file_cache`: `{ filepath: source_string }`
+   - `results_cache`: `{ filepath: dependency_results }`
+2. **Cache** — `get_corpus_index()` saves/loads all three structures as `seeds/corpus_cache.pkl` to avoid re-parsing on subsequent runs
+3. **Map** — `COMP_TO_DESCRIPTIONS` maps JOC comp_types to PHP AST description strings
+4. **Fill** — `synthesize()` walks the constraint tree:
+   - `ControlComp` sublists become synthetic PHP control wrappers via `synthesize_region()`
+   - `DataComp` leaves become real PHP source via `pick_data_source()`, which uses `get_dependency_slice()` to include all defining predecessors
 
-### Node types handled
+### JOC constraint structure
 
-**Definitions (writes):**
-- `Expr_Assign`, `Expr_AssignRef`, all `Expr_AssignOp_*`
-- `Expr_PreInc`, `Expr_PreDec`, `Expr_PostInc`, `Expr_PostDec`
-- Destructuring via `Expr_List` / `Expr_Array`
-- `Stmt_Foreach` (key/value vars), `Stmt_For` (init exprs)
-- `Stmt_Global`, `Stmt_Static`
+Constraints are pickled nested lists. Each list's first element is a `ControlComp` (the region type), followed by `DataComp` leaves and nested sublists:
 
-**Uses (reads):**
-- `Expr_Variable`, `Expr_ArrayDimFetch`, `Expr_PropertyFetch`
-- `Expr_NullsafePropertyFetch`, `Expr_StaticPropertyFetch`
+```
+[ControlComp('main'),
+  [ControlComp('func'), DataComp('assign'), DataComp('return')],
+  DataComp('func_call'),
+  DataComp('func_call')]
+```
 
-### Valid assignment targets (from php-parser)
+### COMP_TO_DESCRIPTIONS mapping
 
-Only these node types can appear as LHS: `Expr_Variable`, `Expr_ArrayDimFetch`, `Expr_PropertyFetch`, `Expr_NullsafePropertyFetch`, `Expr_StaticPropertyFetch`, `Expr_List`, `Expr_Array` (destructuring only).
+| JOC comp_type | PHP descriptions |
+|---|---|
+| `if`, `else` | `Stmt_If (region)` |
+| `for` | `Stmt_For (region)`, `Stmt_Foreach (region)` |
+| `while`, `do_while` | `Stmt_While (region)` |
+| `try` | `Stmt_TryCatch (region)` |
+| `func` | `Stmt_Function (region)`, `Stmt_ClassMethod (region)` |
+| `class` | `Stmt_Class (region)`, `Stmt_Trait (region)`, `Stmt_Interface (region)` |
+| `method` | `Stmt_ClassMethod (region)` |
+| `assign` | `Expr_Assign`, `Expr_AssignRef` |
+| `var_dec` | `Expr_Assign` |
+| `func_call` | `Expr_FuncCall`, `Expr_MethodCall` |
+| `update` | `Expr_PostInc`, `Expr_PreInc`, `Expr_PostDec`, `Expr_PreDec` |
+| `return` | `Stmt_Return` |
+
+### Corpus cache
+
+The first `--synth` run parses all ~509 seed files and saves the index to `seeds/corpus_cache.pkl`. Subsequent runs load the cache instantly. Use `--rebuild-cache` to force a fresh build.
+
+### Pickle module remapping
+
+Constraint pickles were created with bare `comps` module imports. `_CompsUnpickler` remaps `comps` -> `jc.comps` so `isinstance` checks work correctly with our `from jc.comps import ...` imports.
 
 ## Usage
 
 ```bash
-# Run with a target PHP script
-python php_dependency_analyzer.py script.php
+# Synthesize from a single constraint
+python3 driver.py --synth jc/con_out/accessors-no-prototype.pickle --seeds seeds/
 
-# Run with built-in example (no args)
-python php_dependency_analyzer.py
+# Synthesize from all constraints, 2 variants each
+python3 driver.py --synth jc/con_out/ --seeds seeds/ --count 2 --out synth_out/
+
+# Force cache rebuild
+python3 driver.py --synth jc/con_out/ --seeds seeds/ --rebuild-cache
+
+# Profile seed corpus (standalone, does not use synthesizer cache)
+python3 driver.py --profile seeds/
+
+# Run dependency analyzer directly
+python3 php_dependency_analyzer.py script.php
 ```
 
 ### Programmatic use
 
 ```python
-from php_dependency_analyzer import build_statement_dependencies, get_dependency_closure
-import json
-import subprocess
+from driver import get_corpus_index, load_constraint, synthesize
 
-command = ['bash','./php_to_ast.sh',target_file]
-child = subprocess.Popen(command,stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,text=True)
-stdout,stderr = child.communicate(timeout=120)
-child.kill()
-ast = json.loads(stdout)
-
-results = build_statement_dependencies(ast)
-
-# Get all statements needed to print statement 5
-closure = get_dependency_closure(results, 5)
+node_type_index, file_cache, results_cache = get_corpus_index('./seeds')
+constraint = load_constraint('jc/con_out/some-constraint.pickle')
+php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
 ```
+
+## Key design decisions
+
+- **Dependency slices, not bare statements**: `pick_data_source()` uses `get_dependency_slice()` to include all transitive variable-defining predecessors, preventing undefined variable errors
+- **Synthetic control wrappers**: Region headers (`if (true)`, `for ($i_0 = 0; ...)`, `function f_0()`) are generated rather than extracted from seeds, since extracting partial control structures via byte offsets is unreliable
+- **Unique name counters**: `_next_name()` generates `f_0`, `f_1`, `C_0`, `i_0`, etc. to avoid name collisions across regions
+- **Extensionless file support**: Seed files lack `.php` extensions; `build_corpus_index()` accepts them by checking for `<?php` header
+- **Symbol keys** are canonicalized: `$a`, `$obj->prop`, `Foo::$bar`, `$a[*]` (array indices collapsed)
+- **Single pass, linear scan** — no CFG. Correct for straight-line code; approximate across branches
 
 ## Known limitations
 
-- **No control flow**: `if`/`else`/`while` branches are not modeled — dependencies are approximate across branches
+- **No control flow modeling**: `if`/`else`/`while` branches are not modeled — dependencies are approximate across branches
 - **No aliasing**: `$a =& $b` doesn't link the two symbols
 - **Array index collapse**: `$a[0]` and `$a[1]` map to the same symbol `$a[*]`
-- **Dynamic variables**: `${$name}` is ignored (returns None)
+- **Dynamic variables**: `${$name}` is ignored
 - **Single scope**: No function/method boundary awareness — treats everything as one flat scope
-- **Linear only**: `last_def` tracks the most recent definition; no phi/merge at join points
+- **Cross-file deps**: Dependency slices come from the original seed file; variables from different seed files may still collide in the synthesized output
+- **Greedy slot-filling**: Each slot is filled independently and randomly — no global coherence across the synthesized script
 
 ## Extending
 
-**Add CFG awareness**: Introduce basic blocks, track multiple reaching definitions per variable at join points, analyze the dependencies inside of control/object regions (if statements, functions, classes, etc.).
-
-**Add scope boundaries**: Reset `last_def` at function/class boundaries, or maintain a scope stack.
-
-**Finer array tracking**: Replace `$a[*]` with `$a[0]`, `$a["key"]` etc. for more precise dependencies.
-
-**Object property precision**: Track `$this->x` vs `$other->x` as distinct symbols.
-
+- **Smarter slot filling**: Use type-aware or scope-aware matching instead of random selection
+- **Variable renaming**: Alpha-rename variables in extracted slices to avoid cross-file collisions
+- **CFG awareness**: Track multiple reaching definitions at join points
+- **Scope boundaries**: Reset `last_def` at function/class boundaries
+- **Finer array tracking**: Replace `$a[*]` with `$a[0]`, `$a["key"]` for more precise dependencies
