@@ -7,6 +7,7 @@ import pickle
 import os
 import argparse
 import random
+from secrets import token_hex
 
 
 class _CompsUnpickler(pickle.Unpickler):
@@ -15,6 +16,28 @@ class _CompsUnpickler(pickle.Unpickler):
         if module == 'comps':
             module = 'jc.comps'
         return super().find_class(module, name)
+
+
+def sanitize(php_file):
+    is_error = lambda x: os.path.exists(x+".er")
+    is_trash = lambda x: os.path.exists(x+".tr")
+    for i in range(2):
+        command = ['bash','./sanitize.sh',os.path.join(os.getcwd(),php_file),str(i)]
+        child = None
+        try:
+            child = subprocess.run(command,
+                                   text=True,
+                                   timeout=30,
+                                   capture_output=True)
+        except subprocess.TimeoutExpired as exc:
+            break
+    try:
+        if is_trash(php_file):
+            os.remove(php_file+".tr")
+        elif not(is_error(php_file)):
+            os.remove(php_file)
+    except Exception as e:
+        return
 
 
 def load_constraint(path):
@@ -349,6 +372,59 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache):
     return "\n".join(lines) + "\n"
 
 
+def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False):
+    """Run an infinite fuzzing loop: synthesize, write, sanitize, repeat."""
+    # Load all constraints
+    pickle_files = sorted([
+        os.path.join(constraints_dir, f)
+        for f in os.listdir(constraints_dir) if f.endswith('.pickle')
+    ])
+    if not pickle_files:
+        print(f"No .pickle files found in {constraints_dir}")
+        return
+    constraints = []
+    for pf in pickle_files:
+        try:
+            constraints.append((pf, load_constraint(pf)))
+        except Exception as e:
+            print(f"Warning: skipping {pf}: {e}")
+    print(f"Loaded {len(constraints)} constraints from {constraints_dir}")
+
+    node_type_index, file_cache, results_cache = get_corpus_index(
+        seed_dir, rebuild=rebuild_cache)
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    iteration = 0
+    errors_found = 0
+    print("Fuzzing started. Ctrl+C to stop.\n")
+    try:
+        while True:
+            iteration += 1
+            pf, constraint = random.choice(constraints)
+            php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
+            base_name = os.path.splitext(os.path.basename(pf))[0]
+            out_name = f"fuzz_{base_name}_{token_hex(5)}.php"
+            out_path = os.path.join(out_dir, out_name)
+            with open(out_path, 'w') as f:
+                f.write(php_source)
+            sanitize(out_path)
+            if os.path.exists(out_path + ".er"):
+                errors_found += 1
+                print(f"[{iteration}] ERROR found: {out_path}.er")
+            else:
+                print(f"[{iteration}] clean  (errors so far: {errors_found})", end='\r')
+    except KeyboardInterrupt:
+        print(f"\n\nFuzzing stopped after {iteration} iterations.")
+        print(f"Errors found: {errors_found}")
+        # List any .er files
+        er_files = [f for f in os.listdir(out_dir) if f.endswith('.er')]
+        if er_files:
+            print(f"Error files in {out_dir}/:")
+            for ef in sorted(er_files):
+                print(f"  {ef}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="PHP dependency analyzer driver")
     parser.add_argument('--profile', metavar='DIR',
@@ -356,6 +432,9 @@ def main():
     parser.add_argument('--synth', metavar='PATH',
                         help='Synthesize PHP scripts from JOC constraint pickle(s). '
                              'PATH can be a single .pickle file or a directory of them.')
+    parser.add_argument('--fuzz', metavar='DIR',
+                        help='Run infinite fuzzing loop using constraints from DIR. '
+                             'Generates, sanitizes, and reports errors continuously.')
     parser.add_argument('--seeds', metavar='DIR', default='./seeds',
                         help='Path to seed corpus directory (default: ./seeds)')
     parser.add_argument('--count', type=int, default=1,
@@ -366,7 +445,10 @@ def main():
                         help='Force rebuild of the corpus cache even if one exists')
     args = parser.parse_args()
 
-    if args.synth:
+    if args.fuzz:
+        fuzz_loop(args.fuzz, args.seeds, args.out, rebuild_cache=args.rebuild_cache)
+
+    elif args.synth:
         # Collect constraint pickle files
         if os.path.isdir(args.synth):
             pickle_files = sorted([
@@ -383,7 +465,7 @@ def main():
 
         for pf in pickle_files:
             constraint = load_constraint(pf)
-            base_name = os.path.splitext(os.path.basename(pf))[0]
+            base_name = os.path.splitext(os.path.basename(pf))[0]+token_hex(5)
             for i in range(args.count):
                 php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
                 if args.count == 1:

@@ -1,2 +1,0 @@
-<?php
-var_dump(exif_read_data(__DIR__.'/image021.tiff'));
