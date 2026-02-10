@@ -1,2 +1,0 @@
-<?php
-$match->invoked($invocation);

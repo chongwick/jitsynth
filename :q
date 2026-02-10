@@ -159,7 +159,7 @@ def build_corpus_index(seed_dir):
             except Exception:
                 continue
         try:
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            with codecs.open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 source = f.read()
             file_cache[filepath] = source
             ast = _build_ast_safe(filepath)

@@ -1,2 +1,0 @@
-<?php
-$mysqli->query($sql);

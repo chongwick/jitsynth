@@ -1,2 +1,0 @@
-<?php
-imagesetstyle($im, $style);

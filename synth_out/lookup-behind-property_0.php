@@ -1,3 +1,0 @@
-<?php
-$obj = NULL;
-bar();

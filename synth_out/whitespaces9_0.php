@@ -1,2 +1,0 @@
-<?php
-$datefmt->parse('abc');
