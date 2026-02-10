@@ -1,0 +1,52 @@
+<?php
+$a = new PDO("sqlite::memory:");
+$bert = "file://" . __DIR__ . "/bug41033.pem";
+$stmt = $pdo->prepare($reqOfBig, $attrs);
+$xmlString = "<root><a><b>1</b><b>2</b><b>3</b></a></root>";
+$x = new X;
+var_dump ( rtrim("rtrim test        ", " ") );
+var_dump(rename("phar://a.phar/x", "phar://a.phar/y"));
+mail("some.address.it.wont.ever.reach@lookup.and.try.to.find.this.host.name","subject","a", "");
+var_dump($line);
+spl_autoload_register($callback1);
+var_dump ( rtrim("rtrim testABCXYZ", "A..Z") );
+$sh->open('path', 'name');
+(new Test)->bar(do_throw());
+var_dump( is_object($object) );
+var_dump($db->query("SELECT * from test34630")->fetchAll(PDO::FETCH_ASSOC));
+test("http://test[@2001:db8:3333:4444:5555:6666:1.2.3.4]");
+$a->gen();
+var_dump($argv);
+et_basename;
+var_dump(soundex("Lukasiewicz") == soundex("Ghosh"));
+imageline($im, 600, 700, 100, 200, IMG_COLOR_STYLED);
+date_default_timezone_set("UTC");
+define("TEST",3);
+$dt->setTimezone(new DateTimeZone('America/Boise'));
+var_dump(openssl_x509_checkpurpose($sert, X509_PURPOSE_TIMESTAMP_SIGN, array($cpca)));
+$xp->query("//foo[contains(text(), " . $xp->quote("tes\x00t") . ")]");
+$uri = 'http://' . stream_socket_get_name($server, false);
+$c = [];
+$this->timestamp = $timestamp;
+ini_set('mysqlnd.fetch_data_copy', true);
+$test2->test();
+zerofill(4, $link, 'MEDIUMINT');
+var_dump($temp_array);
+fwrite($fp, "test");
+curl_exec($curl);
+$subject = 'string';
+printf("%.1f%% vs. %.1f%%\n", 100. * $halves[0] / $total, 100. * $halves[1] / $total);
+$a->test(new B());
+var_dump($obj);
+$match->invoked($invocation);
+printf("printf test 28:%2\$02d %1\$2d\n", 1, 2);
+for ($i_0 = 0; $i_0 < 10; $i_0++) {
+    $zip = new ZipArchive();
+    set_exception_handler(function() {
+    echo 'Second handler' . PHP_EOL;
+});
+}
+$array = array("test" => 1);
+var_dump($b, $GLOBALS['b'], $c);
+$body->setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:a", "");
+print_r( $r['testvector'] );

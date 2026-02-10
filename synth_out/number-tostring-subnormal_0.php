@@ -1,0 +1,50 @@
+<?php
+$im = imagecreatefromgd2(__DIR__ . DIRECTORY_SEPARATOR . 'bug73161.gd2');
+$dir_handle = opendir( __DIR__ );
+mysqli_free_result($res);
+$element->prepend('x', new DOMEntity);
+usort($array, function($a, $b) use (&$array, &$ref) {
+    unset($array[2]);
+    $ref = $array;
+    return $a <=> $b;
+});
+printf("printf test 21:%016b\n", 170);
+$element->prepend('x', new DOMEntity);
+var_dump(http_get_last_response_headers());
+var_dump( strtok($string, "\0") );
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+var_dump(openssl_x509_checkpurpose($bert, X509_PURPOSE_NS_SSL_SERVER, array($cpca), $utfl));
+krsort($flags);
+var_dump($x);
+foo();
+var_dump(sprintf("%%%.2f", 1.23456789e10));
+zerofill(10, $link, 'DOUBLE PRECISION');
+pfsockopen('udp://127.0.0.1', '63844', $code, $err, NAN);
+var_dump(fseek($fp, -1, SEEK_SET));
+var_dump(openssl_x509_checkpurpose($cert, X509_PURPOSE_SMIME_SIGN, array($cpca)));
+var_dump(serialize($r));
+var_dump($re->getConstants());
+var_dump($a);
+var_dump(mysqli_get_server_version($link));
+$zip->close();
+var_dump(foo());
+session_start();
+with_cp($dn, 65001, false));
+}
+chdir($old_cwd);
+
+foreach;
+$db->exec('CREATE TABLE test34630 (id int NOT NULL PRIMARY KEY, val VARCHAR(256))');
+print_r($client->GetExpressCheckoutDetails());
+$zip->close();
+var_dump(openssl_x509_checkpurpose($sert, X509_PURPOSE_ANY, array($cpca)));
+var_dump($obj->a);
+zerofill(5, $link, 'INT');
+var_dump(pg_update($conn,$table, array('value' => 'inf'), array('id' => 1), PGSQL_DML_STRING));
+$list->add(0, new C);
+$tester->terminate();
+var_dump(openssl_x509_checkpurpose($bert, X509_PURPOSE_CRL_SIGN, array($cpca)));
+$phar->setDefaultStub(str_repeat('a', 401));
+var_dump($array_object);
+printf("printf test 27:%3\$d %d %d\n", 1, 2, 3);
+$match->invoked($invocation);

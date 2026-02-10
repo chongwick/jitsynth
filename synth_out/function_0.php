@@ -1,0 +1,60 @@
+<?php
+$gen = gen();
+var_dump(openssl_pkey_new(array('dsa' => array('p' => $p, 'q' => $q, 'g' => $g))));
+$this->a = $a;
+var_dump(openssl_x509_checkpurpose($sert, X509_PURPOSE_ANY, array($cpca)));
+$it = new RecursiveIteratorIterator($iterator);
+$a->query ("CREATE TABLE test_35336 (a integer primary key, b text)");
+$prefix = __DIR__ . DIRECTORY_SEPARATOR . "testBug61315" . DIRECTORY_SEPARATOR;
+fclose($output);
+$to = $users[0];
+var_dump(__METHOD__);
+$filename = __DIR__ . DIRECTORY_SEPARATOR . 'bug70752.zip';
+var_dump($obj2->getTest());
+$immutable = $reflection->newInstanceWithoutConstructor();
+$dt->add(new DateInterval('PT1M'));
+=> imagecreatefromgd2part($file, 0,0, -25, 10),
+    fn() => imagecreatefromgd2part($file, 0,0, 10, -25)
+);
+
+unlink($file);
+?>;
+var_dump(pg_last_notice($dbh));
+$is_oci = $driver == 'oci';
+st0.txt");
+touch("$d1\\t;
+$magic_file = __DIR__ . '/bug79283.db';
+var_dump(soundex("Lloyd")       == soundex("Ladd"));
+$ffi = FFI::cdef($header, ffi_get_php_dll_name());
+var_dump(openssl_x509_checkpurpose($cert, X509_PURPOSE_SMIME_SIGN, array($cpca)));
+$tags = exif_read_data($mixedEndiannessFile, 'EXIF', true, false);
+$eml = __DIR__ . "/signed.eml";
+var_dump( range('A', 'H', 0) );
+$bug_gh16013_callback_struct->return_int32 = function($val) use($ffi) {
+    $cdata = $ffi->new('int32_t');
+    $cdata->cdata = $val;
+    return $cdata;
+};
+var_dump(lookup(513));
+closedir( $dir_handle );
+var_dump(sprintf("%s", $tempstring, $tempstring, $tempstring));
+$fp = php_cli_server_connect();
+fclose( $file_handle );
+$sql = sprintf('ALTER TABLE test ADD zero %s UNSIGNED ZEROFILL', $datatype);
+var_dump(json_decode('[]', false, 0x100000000));
+var_dump(strncmp("test ", "e", -1));
+$db = MySQLPDOTest::factory();
+$db->exec('CREATE TABLE test_80908 (`id` BIGINT(20) UNSIGNED AUTO_INCREMENT, `name` VARCHAR(5), PRIMARY KEY (`id`)) ENGINE = InnoDB AUTO_INCREMENT=10376293541461622799');
+unlink($filename);
+test($arg)->name[1] = "xxxx";
+$reflector = new ReflectionClass(C::class);
+$sh = new SessionHandler;
+$res = unpack("H*", $res)[1];
+$this->server = new SoapServer($wsdl);
+$db = PDOTest::factory();
+$obj = new test;
+$fiber->start();
+imagecolorallocate($im, 255, 255, 255);
+$dir_handle = opendir( __DIR__ );
+var_dump(gzread($h, 8));
+printf("printf test 12:%5.2f\n", -12.34);

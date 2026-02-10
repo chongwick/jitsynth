@@ -1,0 +1,67 @@
+<?php
+$a = NULL;
+$o = new SplFileInfo('.');
+$varOutput = ob_get_contents();
+$iterator = 1;
+$this->matchers[] = $matcher;
+var_dump(substr_compare('/', '/asd', 0, 4));
+define('OBJECT_COUNT', 10000);
+var_dump($ffi->bug_gh16013_return_struct());
+printf("printf test 16:%x\n", 170);
+$driver = $db->getAttribute(PDO::ATTR_DRIVER_NAME);
+$now = new DateTimeImmutable();
+$im = imagecreate(800, 800);
+$a = bar($gen);
+$res = $link->query($sql);
+dumpNodeList($dom->getElementsByTagName("foo:HTML"));
+$sert = "file://" . __DIR__ . "/san-cert.pem";
+$diff = $ago->diff($now);
+function f_0() {
+    return "Object";
+}
+$a = 'ok';
+$stmt1 = $pdo->query($reqOf3);
+$ftp = ftp_connect('127.0.0.1', $port);
+$this->guid = 1;
+$a = new A();
+$db->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+$b->dyn = 1;
+$now = new DateTimeImmutable('2022-10-10 08:41:54.534620', new DateTimeZone('UTC'));
+$body = $dom->getElementsByTagName("body")[0];
+$test_fl = __DIR__ . DIRECTORY_SEPARATOR . md5(uniqid());
+$compressed[strlen($compressed) - 15] = 'X';
+$f = function () {};
+$tbl = "test";
+$ffi = FFI::cdef($h);
+$before = memory_get_usage();
+$i = 1;
+var_dump($target);
+set_exception_handler(function () { print "EX\n"; });
+var_dump( array_uintersect_uassoc($array1, $value, $data_compare_func, $key_compare_func) );
+session_write_close();
+var_dump(A::fromArray(['a' => 'foo']));
+var_dump($bar);
+$elem->ThrowException();
+var_dump(openssl_x509_checkpurpose($cert, X509_PURPOSE_CRL_SIGN, array($cpca), $utfl));
+function f_1() {
+    $headers = $client->__getLastRequestHeaders();
+    $this->foo_object = new foo();
+}
+$this->a = $a;
+$unset_object = new foo();
+$data = array_unique($data, flags: SORT_REGULAR);
+$a = NULL;
+$empty = "";
+curl_exec($ch);
+printf("Flags        : %d\n", $field->flags);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+var_dump( array_unshift($temp_array, $var) );
+$a = new A;
+$dom->loadXML('<root><child/></root>');
+$curl = curl_init("http://www.google.com");
+$this->callInitiator = "IVR";
+$dsn = ini_get('pdo.dsn.mysql');
+imagescale($im, 1, 1, IMG_BICUBIC_FIXED);
+var_dump(foo());
+var_dump($s);
+$tester->request(connKeepAlive: true)->expectBody('1');

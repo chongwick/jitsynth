@@ -1,0 +1,62 @@
+<?php
+$array_test = array("a", "b", "d", 7, "u" => "U", -4, "-.008" => "neg.008");
+$b = bar($gen);
+$im = ImageCreateTrueColor(10, 10);
+$this->logOnEvent = $logOnEvent;
+$j = 0;
+$ar1 = array("row1" => 2, "row2" => 1);
+$this->protected_var = new foo();
+fclose($fp);
+var_dump($foo);
+dumpNodeList($dom->getElementsByTagName("HTML"));
+var_dump($dom->lookupNamespaceURI("a"));
+printf("[002] Connect failed, [%d] %s\n", mysqli_connect_errno(), mysqli_connect_error());
+var_dump($oIntlDateFormatter->getTimeZone()->getID());
+var_dump(posix_setrlimit(POSIX_RLIMIT_NOFILE, 129, 128));
+test([0], [1], 2);
+printf("[006] [%d] %s\n", $stmt->errno, $stmt->error);
+printf("%s: %s\n", $e::class, $e->getMessage());
+printf("[001] Expecting integer on 64bit got %s/%s\n", gettype($id), var_export($id, true));
+printf("# Proxy:\n");
+spl_autoload_register($callback1);
+var_dump($stmt->fetchAll());
+printf("[009] Cannot run SELECT, [%d] %s\n",
+                mysqli_errno($link), mysqli_error($link));
+var_dump(preg_match_all($regex, $subject, 'test'));
+var_dump($oIntlDateFormatter->parse('America/Los_Angeles', $offset1));
+var_dump("done");
+printf("[002] [%d] %s\n", mysqli_errno($link), mysqli_error($link));
+var_dump ( rtrim("rtrim test        ", " ") );
+var_dump( range('A', 'H', fdiv(0, 0)) );
+var_dump($body->lookupNamespaceURI(NULL));
+unlink($filename);
+zerofill(7, $link, 'BIGINT');
+printf("%.1f%% vs. %.1f%%\n", 100. * $halves[0] / $total, 100. * $halves[1] / $total);
+fwrite($fd, "foo");
+sprintf('%2147483648$s, %2$s %1$s', "a", "b");
+closedir($dir);
+var_dump(http_get_last_response_headers());
+printf("# %s\n", $name);
+var_dump($initialRequest ? $x : $y);
+bar();
+$stmt->bind_result($id);
+$db->beginTransaction();
+var_dump(openssl_x509_checkpurpose($cert, X509_PURPOSE_SSL_SERVER, array($cpca)));
+ob_start("test");
+set_error_handler(function() {
+//    var_dump(func_get_args());
+    DoesNotExists::$nope = true;
+}, E_ALL);
+printf("pdo.dsn.mysql=%s\n", $dsn);
+var_dump( mb_strpos($string_mb, $needle, $i, 'UTF-8') );
+var_dump(filter_var("?><!@#$%^&*()}{~Qwertyuilfdsasdfgmnbvcxcvbn", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_HIGH));
+$sh->write("foo", "bar");
+var_dump(file_get_contents("http://" . PHP_CLI_SERVER_ADDRESS, false, $context));
+$g = 'hi';
+$PHP_SELF = 1;
+function f_0() {
+    $xMailer = 'bug80706_x_mailer';
+    return "key";
+}
+display($res);
+ob_end_flush();

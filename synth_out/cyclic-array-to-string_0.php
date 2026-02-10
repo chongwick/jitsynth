@@ -1,0 +1,38 @@
+<?php
+$style[$i++] = $color;
+var_dump ( rtrim("rtrim test0123456789", "0..9") );
+var_dump(json_decode('{"key":"value", "":"value"}', true));
+var_dump(curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 1));
+$reflector->resetAsLazyGhost($obj, function ($obj) {
+    var_dump("initializer");
+    $obj->__construct();
+});
+$phar->setDefaultStub(str_repeat('a', 401));
+var_dump(gc_collect_cycles());
+stream_wrapper_register('dummy', DummyWrapper::class);
+var_dump ( $vars );
+dumpNodeList($dom->getElementsByTagName("bar:HTML"));
+$pdo->query('CREATE TABLE bug79596 (broken FLOAT(2,1))');
+var_dump(openssl_x509_checkpurpose($sert, X509_PURPOSE_TIMESTAMP_SIGN, array($cpca), $utfl));
+ob_end_clean();
+var_dump(call_user_func_array("array_multisort", $args));
+var_dump(openssl_x509_checkpurpose($sert, X509_PURPOSE_SMIME_ENCRYPT, array($cpca), $utfl));
+$link->real_query($sql);
+$fp = fopen(__FILE__, "r");
+$dest = dirname(realpath(__FILE__)) . '/bug27582.png';
+var_dump($date->format("D") == $date2->format("D"));
+var_dump(openssl_x509_checkpurpose($sert, X509_PURPOSE_TIMESTAMP_SIGN));
+test('Ghost', $obj);
+var_dump($obj);
+($filename);
+?>;
+var_dump($args);
+$ai->rewind();
+fclose($file_handle);
+var_dump(openssl_x509_checkpurpose($cert, X509_PURPOSE_NS_SSL_SERVER, array($cpca)));
+$fiber = $iterable = $canary = null;
+[ $func, $argv ] = $func_argv;
+$tester->expectLogStartNotices();
+var_dump($test);
+printf("printf test 3:%f\n", 10.0/3);
+spl_autoload_register($callback1);
