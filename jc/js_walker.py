@@ -6,6 +6,7 @@ import codecs
 import os
 import sys
 import pickle
+from multiprocessing import Pool
 from comps import *
 
 class Walker():
@@ -300,24 +301,44 @@ class Walker():
             return (False, None)
 
 
-def batch_generate(seed_dir, output_dir):
+def _process_single_file(args):
+    """Worker function for parallel batch processing."""
+    filepath, fname, output_dir = args
+    w = Walker(debug=False)
+    ok, env = w.generate_constraints(filepath)
+    if ok:
+        out_path = os.path.join(output_dir, fname.replace('.js', '.pickle'))
+        with open(out_path, 'wb') as f:
+            pickle.dump(env, f)
+        return (True, fname)
+    return (False, fname)
+
+
+def batch_generate(seed_dir, output_dir, parallel=1):
     os.makedirs(output_dir, exist_ok=True)
     success = 0
     fail = 0
     failures = []
     seeds = sorted([f for f in os.listdir(seed_dir) if f.endswith('.js')])
-    for fname in seeds:
-        filepath = os.path.join(seed_dir, fname)
-        w = Walker(debug=False)
-        ok, env = w.generate_constraints(filepath)
-        if ok:
-            success += 1
-            out_path = os.path.join(output_dir, fname.replace('.js', '.pickle'))
-            with open(out_path, 'wb') as f:
-                pickle.dump(env, f)
-        else:
-            fail += 1
-            failures.append(fname)
+    work = [(os.path.join(seed_dir, fname), fname, output_dir) for fname in seeds]
+
+    if parallel > 1:
+        with Pool(processes=parallel) as pool:
+            for ok, fname in pool.imap_unordered(_process_single_file, work):
+                if ok:
+                    success += 1
+                else:
+                    fail += 1
+                    failures.append(fname)
+    else:
+        for item in work:
+            ok, fname = _process_single_file(item)
+            if ok:
+                success += 1
+            else:
+                fail += 1
+                failures.append(fname)
+
     total = success + fail
     rate = (success / total * 100) if total > 0 else 0
     print(f"Batch: {success}/{total} succeeded ({rate:.1f}%)")
@@ -327,12 +348,15 @@ def batch_generate(seed_dir, output_dir):
             print(f"  {f}")
     return success, fail, failures
 
-
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == '--batch':
         seed_dir = sys.argv[2] if len(sys.argv) > 2 else '../js_seeds'
         output_dir = sys.argv[3] if len(sys.argv) > 3 else './con_out'
-        batch_generate(seed_dir, output_dir)
+        jobs = 1
+        for i, arg in enumerate(sys.argv):
+            if arg in ('-j', '--jobs') and i + 1 < len(sys.argv):
+                jobs = int(sys.argv[i + 1])
+        batch_generate(seed_dir, output_dir, parallel=jobs)
     else:
         w = Walker(True)
         if len(sys.argv) > 1:

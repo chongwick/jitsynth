@@ -7,7 +7,9 @@ import pickle
 import os
 import argparse
 import random
+import math
 from secrets import token_hex
+from multiprocessing import Pool
 
 
 class _CompsUnpickler(pickle.Unpickler):
@@ -16,6 +18,9 @@ class _CompsUnpickler(pickle.Unpickler):
         if module == 'comps':
             module = 'jc.comps'
         return super().find_class(module, name)
+
+def _clean():
+    os.system(f"git clean -fd -e php -e /ramdisk")
 
 
 def sanitize(php_file):
@@ -88,27 +93,49 @@ def _build_ast(target_file):
     except Exception as e:
         print(e);quit()
 
-def profile_corpus(input_dir):
-    index = {}
-    for filename in os.listdir(input_dir):
-        if not filename.endswith('.php'):
-            continue
-        filepath = os.path.join(input_dir, filename)
-        try:
-            ast = _build_ast_safe(filepath)
-            if ast is None:
-                continue
-            results = build_statement_dependencies(ast)
-        except Exception as e:
-            print(f"Warning: skipping {filepath}: {e}")
-            continue
+def _profile_one_file(filepath):
+    """Worker: profile a single PHP file. Returns list of (desc, entry) or None."""
+    try:
+        ast = _build_ast_safe(filepath)
+        if ast is None:
+            return None
+        results = build_statement_dependencies(ast)
+        entries = []
         for r in results:
             desc = r['description']
             entry = (filepath, r['stmt_id'], r.get('start_file_pos'), r.get('end_file_pos'))
+            entries.append((desc, entry))
+        return entries
+    except Exception as e:
+        print(f"Warning: skipping {filepath}: {e}")
+        return None
+
+
+def profile_corpus(input_dir, parallel=1):
+    index = {}
+    filepaths = [
+        os.path.join(input_dir, f)
+        for f in os.listdir(input_dir)
+        if f.endswith('.php')
+    ]
+
+    def _merge(entries):
+        if entries is None:
+            return
+        for desc, entry in entries:
             if desc not in index:
                 index[desc] = [entry]
             else:
                 index[desc].append(entry)
+
+    if parallel > 1:
+        with Pool(processes=parallel) as pool:
+            for entries in pool.imap_unordered(_profile_one_file, filepaths):
+                _merge(entries)
+    else:
+        for fp in filepaths:
+            _merge(_profile_one_file(fp))
+
     return index
 
 def _build_ast_safe(target_file):
@@ -162,7 +189,39 @@ COMP_TO_DESCRIPTIONS = {
 CORPUS_CACHE_FILE = 'corpus_cache.pkl'
 
 
-def build_corpus_index(seed_dir):
+def _is_php_seed(filepath, filename):
+    """Check if a file is a PHP seed (has .php extension or starts with <?php)."""
+    if filename.endswith('.php'):
+        return True
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            header = f.read(64)
+        return header.lstrip().startswith('<?php')
+    except Exception:
+        return False
+
+
+def _index_one_file(filepath):
+    """Worker: parse a single seed file. Returns (filepath, source, results, entries) or None."""
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            source = f.read()
+        ast = _build_ast_safe(filepath)
+        if ast is None:
+            return None
+        results = build_statement_dependencies(ast)
+        entries = []
+        for r in results:
+            desc = r['description']
+            entry = (filepath, r['stmt_id'], r.get('start_file_pos'), r.get('end_file_pos'))
+            entries.append((desc, entry))
+        return (filepath, source, results, entries)
+    except Exception as e:
+        print(f"Warning: skipping {filepath}: {e}")
+        return None
+
+
+def build_corpus_index(seed_dir, parallel=1):
     """Build node_type_index, file_cache, and results_cache from seed corpus.
 
     Accepts extensionless PHP files (checks for <?php header).
@@ -171,38 +230,33 @@ def build_corpus_index(seed_dir):
     node_type_index = {}
     file_cache = {}
     results_cache = {}
+
+    filepaths = []
     for filename in os.listdir(seed_dir):
         filepath = os.path.join(seed_dir, filename)
-        if not os.path.isfile(filepath):
-            continue
-        # Accept .php files or extensionless files that start with <?php
-        if not filename.endswith('.php'):
-            try:
-                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                    header = f.read(64)
-                if not header.lstrip().startswith('<?php'):
-                    continue
-            except Exception:
-                continue
-        try:
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                source = f.read()
-            file_cache[filepath] = source
-            ast = _build_ast_safe(filepath)
-            if ast is None:
-                continue
-            results = build_statement_dependencies(ast)
-            results_cache[filepath] = results
-        except Exception as e:
-            print(f"Warning: skipping {filepath}: {e}")
-            continue
-        for r in results:
-            desc = r['description']
-            entry = (filepath, r['stmt_id'], r.get('start_file_pos'), r.get('end_file_pos'))
+        if os.path.isfile(filepath) and _is_php_seed(filepath, filename):
+            filepaths.append(filepath)
+
+    def _merge(result):
+        if result is None:
+            return
+        filepath, source, results, entries = result
+        file_cache[filepath] = source
+        results_cache[filepath] = results
+        for desc, entry in entries:
             if desc not in node_type_index:
                 node_type_index[desc] = [entry]
             else:
                 node_type_index[desc].append(entry)
+
+    if parallel > 1:
+        with Pool(processes=parallel) as pool:
+            for result in pool.imap_unordered(_index_one_file, filepaths):
+                _merge(result)
+    else:
+        for fp in filepaths:
+            _merge(_index_one_file(fp))
+
     return node_type_index, file_cache, results_cache
 
 
@@ -223,12 +277,13 @@ def load_corpus_cache(seed_dir):
         return pickle.load(f)
 
 
-def get_corpus_index(seed_dir, rebuild=False):
+def get_corpus_index(seed_dir, rebuild=False, parallel=1):
     """Load corpus index from cache, or build and cache it.
 
     Args:
         seed_dir: path to the seed corpus directory
         rebuild: if True, ignore any existing cache and rebuild from scratch
+        parallel: number of worker processes for building the index
     """
     if not rebuild:
         cached = load_corpus_cache(seed_dir)
@@ -239,8 +294,9 @@ def get_corpus_index(seed_dir, rebuild=False):
                   f"{len(node_type_index)} types, {len(file_cache)} files)")
             return node_type_index, file_cache, results_cache
 
-    print(f"Building corpus index from {seed_dir}...")
-    node_type_index, file_cache, results_cache = build_corpus_index(seed_dir)
+    print(f"Building corpus index from {seed_dir}..." +
+          (f" ({parallel} workers)" if parallel > 1 else ""))
+    node_type_index, file_cache, results_cache = build_corpus_index(seed_dir, parallel=parallel)
     print(f"Indexed {sum(len(v) for v in node_type_index.values())} statements "
           f"across {len(node_type_index)} types from {len(file_cache)} files")
     save_corpus_cache(seed_dir, node_type_index, file_cache, results_cache)
@@ -372,7 +428,7 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache):
     return "\n".join(lines) + "\n"
 
 
-def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False):
+def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1):
     """Run an infinite fuzzing loop: synthesize, write, sanitize, repeat."""
     # Load all constraints
     pickle_files = sorted([
@@ -391,7 +447,7 @@ def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False):
     print(f"Loaded {len(constraints)} constraints from {constraints_dir}")
 
     node_type_index, file_cache, results_cache = get_corpus_index(
-        seed_dir, rebuild=rebuild_cache)
+        seed_dir, rebuild=rebuild_cache, parallel=parallel)
 
     os.makedirs(out_dir, exist_ok=True)
 
@@ -400,6 +456,8 @@ def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False):
     print("Fuzzing started. Ctrl+C to stop.\n")
     try:
         while True:
+            if iteration % 100 == 0:
+                _clean()
             iteration += 1
             pf, constraint = random.choice(constraints)
             php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
@@ -443,10 +501,13 @@ def main():
                         help='Output directory for generated .php files (default: ./synth_out)')
     parser.add_argument('--rebuild-cache', action='store_true',
                         help='Force rebuild of the corpus cache even if one exists')
+    parser.add_argument('-j', '--jobs', type=int, default=1,
+                        help='Number of parallel worker processes (default: 1)')
     args = parser.parse_args()
 
     if args.fuzz:
-        fuzz_loop(args.fuzz, args.seeds, args.out, rebuild_cache=args.rebuild_cache)
+        fuzz_loop(args.fuzz, args.seeds, args.out,
+                  rebuild_cache=args.rebuild_cache, parallel=args.jobs)
 
     elif args.synth:
         # Collect constraint pickle files
@@ -459,7 +520,7 @@ def main():
             pickle_files = [args.synth]
 
         node_type_index, file_cache, results_cache = get_corpus_index(
-            args.seeds, rebuild=args.rebuild_cache)
+            args.seeds, rebuild=args.rebuild_cache, parallel=args.jobs)
 
         os.makedirs(args.out, exist_ok=True)
 
@@ -480,7 +541,7 @@ def main():
         print(f"\nGenerated {len(pickle_files) * args.count} file(s) in {args.out}/")
 
     elif args.profile:
-        index = profile_corpus(args.profile)
+        index = profile_corpus(args.profile, parallel=args.jobs)
         print(f"\nNode type index ({len(index)} types):\n")
         for desc in sorted(index, key=lambda k: len(index[k]), reverse=True):
             print(f"  {desc}: {len(index[desc])} occurrences")
