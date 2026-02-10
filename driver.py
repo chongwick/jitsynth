@@ -4,6 +4,7 @@ import subprocess
 import json
 import pickle
 import os
+import argparse
 
 def profile_script(script_results):
     profile_buckets = {}
@@ -49,23 +50,73 @@ def _build_ast(target_file):
     except Exception as e:
         print(e);quit()
 
+def profile_corpus(input_dir):
+    index = {}
+    for filename in os.listdir(input_dir):
+        if not filename.endswith('.php'):
+            continue
+        filepath = os.path.join(input_dir, filename)
+        try:
+            ast = _build_ast_safe(filepath)
+            if ast is None:
+                continue
+            results = build_statement_dependencies(ast)
+        except Exception as e:
+            print(f"Warning: skipping {filepath}: {e}")
+            continue
+        for r in results:
+            desc = r['description']
+            entry = (filepath, r['stmt_id'], r.get('start_file_pos'), r.get('end_file_pos'))
+            if desc not in index:
+                index[desc] = [entry]
+            else:
+                index[desc].append(entry)
+    return index
+
+def _build_ast_safe(target_file):
+    try:
+        command = ['bash', './php_to_ast.sh', target_file]
+        child = subprocess.Popen(command, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True)
+        stdout, stderr = child.communicate(timeout=120)
+        child.kill()
+        return json.loads(stdout)
+    except Exception as e:
+        print(f"Warning: failed to parse {target_file}: {e}")
+        return None
+
+def print_node(entry):
+    filepath, stmt_id, start_file_pos, end_file_pos = entry
+    if start_file_pos is None or end_file_pos is None:
+        print(f"[{filepath} stmt {stmt_id}]: no file position available")
+        return
+    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        source = f.read()
+    print(source[start_file_pos:end_file_pos + 1])
+
 def main():
-    source,results = analyze_file("g.php")
-    source2,results2 = analyze_file("h.php")
-    gs,gd = get_statement_and_dependency(results,1,source)
-    hs,hd = get_statement_and_dependency(results2,0,source2)
-    x = hd.split("\n")
-    x.insert(2,gs)
-    example_mutation = gd + "\n"  + "\n".join(x)
+    parser = argparse.ArgumentParser(description="PHP dependency analyzer driver")
+    parser.add_argument('--profile', metavar='DIR',
+                        help='Profile all .php files in DIR, print per-type counts, and pickle the index')
+    args = parser.parse_args()
 
-    #target_file = sys.argv[1]
-    #source,results = analyze_file(target_file)
-
-    #results = build_statement_dependencies(ast)
-
-    #print(profile_script(results))
-    #print(dep_slice)
-    #print(get_dependency_slice(results, 2, source))
+    if args.profile:
+        index = profile_corpus(args.profile)
+        print(f"\nNode type index ({len(index)} types):\n")
+        for desc in sorted(index, key=lambda k: len(index[k]), reverse=True):
+            print(f"  {desc}: {len(index[desc])} occurrences")
+        out_path = os.path.join(args.profile, 'node_type_index.pkl')
+        with open(out_path, 'wb') as f:
+            pickle.dump(index, f)
+        print(f"\nIndex saved to {out_path}")
+    else:
+        source,results = analyze_file("g.php")
+        source2,results2 = analyze_file("h.php")
+        gs,gd = get_statement_and_dependency(results,1,source)
+        hs,hd = get_statement_and_dependency(results2,0,source2)
+        x = hd.split("\n")
+        x.insert(2,gs)
+        example_mutation = gd + "\n"  + "\n".join(x)
 
 if __name__ == "__main__":
     main()
