@@ -1,9 +1,4 @@
 <?php
-function test()
-{
-    echo "Undefined index here: '{$data['HTTP_HEADER']}'\n";
-}
-test();
 #[\AllowDynamicProperties]
 class C {
     public $b;
@@ -11,6 +6,9 @@ class C {
         $this->a = new Canary();
     }
 }
+$reflector = new ReflectionClass(C::class);
 $obj = new C();
-var_dump($obj);
-printf("printf test 22:%016x\n", 170);
+$reflector->resetAsLazyProxy($obj, function ($obj) {
+    var_dump("initializer");
+    return new C();
+});
