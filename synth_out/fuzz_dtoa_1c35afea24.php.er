@@ -1,2 +1,0 @@
-<?php
-var_dump ( rtrim("rtrim test0123456789", "0..9") );

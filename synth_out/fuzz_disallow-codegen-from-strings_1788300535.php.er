@@ -1,4 +1,0 @@
-<?php
-var_dump(soundex("Euler"));
-var_dump(class_exists("TestClass", true));
-phpinfo(INFO_MODULES);

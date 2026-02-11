@@ -1,6 +1,0 @@
-<?php
-function f_0() {
-}
-$dbh = @pg_connect($conn_str);
-$res = pg_query($dbh, 'SELECT test_notice()');
-pg_free_result($res);

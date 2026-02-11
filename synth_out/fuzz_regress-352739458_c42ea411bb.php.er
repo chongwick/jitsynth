@@ -1,3 +1,0 @@
-<?php
-$fp = fopen('php://input', 'r+');
-var_dump(fseek($fp, -1, SEEK_SET));
