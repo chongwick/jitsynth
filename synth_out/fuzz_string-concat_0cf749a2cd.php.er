@@ -1,0 +1,39 @@
+<?php
+function f_0() {
+    $header = <<<HEADER
+    extern int *(*bug79177_cb)(void);
+    void bug79177(void);
+    HEADER;
+    $ffi = FFI::cdef($header);
+    $ffi->bug79177_cb = function() {
+        throw new \RuntimeException('Not allowed');
+    };
+    return 42;
+}
+$counter = 0;
+ob_start(function ($buffer) use (&$c, &$counter) {
+        $c = 0;
+        ++$counter;
+}, 1);
+class TestSoapClient extends SoapClient {
+  private $server;
+
+  function __construct($wsdl) {
+    parent::__construct($wsdl);
+    $this->server = new SoapServer($wsdl);
+    $this->server->addFunction('Test');
+  }
+
+  function __doRequest($request, $location, $action, $version, $one_way = 0): string {
+    ob_start();
+    $this->server->handle($request);
+    $response = ob_get_contents();
+    ob_end_clean();
+    return $response;
+  }
+}
+$client = new TestSoapClient(__DIR__.'/bug38004.wsdl');
+$strA = 'test &amp; test';
+$strB = 'test & test';
+$res = $client->Test(array('strA'=>$strA, 'strB'=>$strB));
+print_r($res);

@@ -20,7 +20,7 @@ class _CompsUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 def _clean():
-    os.system(f"git clean -fd -e php -e seeds -e /ramdisk")
+    os.system(f"git clean -fd -e corpus_cache.pkl -e synth_out -e php -e seeds -e /ramdisk")
 
 
 def sanitize(php_file):
@@ -260,20 +260,18 @@ def build_corpus_index(seed_dir, parallel=1):
     return node_type_index, file_cache, results_cache
 
 
-def save_corpus_cache(seed_dir, node_type_index, file_cache, results_cache):
+def save_corpus_cache(node_type_index, file_cache, results_cache):
     """Pickle the corpus index to disk."""
-    cache_path = os.path.join(seed_dir, CORPUS_CACHE_FILE)
-    with open(cache_path, 'wb') as f:
+    with open(CORPUS_CACHE_FILE, 'wb') as f:
         pickle.dump((node_type_index, file_cache, results_cache), f)
-    print(f"Cache saved to {cache_path}")
+    print(f"Cache saved to {CORPUS_CACHE_FILE}")
 
 
-def load_corpus_cache(seed_dir):
+def load_corpus_cache():
     """Load a previously saved corpus index from disk. Returns None if not found."""
-    cache_path = os.path.join(seed_dir, CORPUS_CACHE_FILE)
-    if not os.path.isfile(cache_path):
+    if not os.path.isfile(CORPUS_CACHE_FILE):
         return None
-    with open(cache_path, 'rb') as f:
+    with open(CORPUS_CACHE_FILE, 'rb') as f:
         return pickle.load(f)
 
 
@@ -286,10 +284,10 @@ def get_corpus_index(seed_dir, rebuild=False, parallel=1):
         parallel: number of worker processes for building the index
     """
     if not rebuild:
-        cached = load_corpus_cache(seed_dir)
+        cached = load_corpus_cache()
         if cached is not None:
             node_type_index, file_cache, results_cache = cached
-            print(f"Loaded cached corpus index from {os.path.join(seed_dir, CORPUS_CACHE_FILE)} "
+            print(f"Loaded cached corpus index from {CORPUS_CACHE_FILE} "
                   f"({sum(len(v) for v in node_type_index.values())} statements, "
                   f"{len(node_type_index)} types, {len(file_cache)} files)")
             return node_type_index, file_cache, results_cache
@@ -299,7 +297,7 @@ def get_corpus_index(seed_dir, rebuild=False, parallel=1):
     node_type_index, file_cache, results_cache = build_corpus_index(seed_dir, parallel=parallel)
     print(f"Indexed {sum(len(v) for v in node_type_index.values())} statements "
           f"across {len(node_type_index)} types from {len(file_cache)} files")
-    save_corpus_cache(seed_dir, node_type_index, file_cache, results_cache)
+    save_corpus_cache(node_type_index, file_cache, results_cache)
     return node_type_index, file_cache, results_cache
 
 
@@ -499,13 +497,19 @@ def main():
                         help='Number of scripts to generate per constraint (default: 1)')
     parser.add_argument('--out', metavar='DIR', default='./synth_out',
                         help='Output directory for generated .php files (default: ./synth_out)')
+    parser.add_argument('--build-cache', action='store_true',
+                        help='Build (or rebuild) the corpus cache and exit')
     parser.add_argument('--rebuild-cache', action='store_true',
                         help='Force rebuild of the corpus cache even if one exists')
     parser.add_argument('-j', '--jobs', type=int, default=1,
                         help='Number of parallel worker processes (default: 1)')
     args = parser.parse_args()
 
-    if args.fuzz:
+    if args.build_cache:
+        get_corpus_index(args.seeds, rebuild=True, parallel=args.jobs)
+        return
+
+    elif args.fuzz:
         fuzz_loop(args.fuzz, args.seeds, args.out,
                   rebuild_cache=args.rebuild_cache, parallel=args.jobs)
 

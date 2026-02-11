@@ -42,7 +42,7 @@ synth_out/                   Generated PHP output (created by --synth)
    - `node_type_index`: `{ description: [(filepath, stmt_id, start_pos, end_pos), ...] }`
    - `file_cache`: `{ filepath: source_string }`
    - `results_cache`: `{ filepath: dependency_results }`
-2. **Cache** — `get_corpus_index()` saves/loads all three structures as `seeds/corpus_cache.pkl` to avoid re-parsing on subsequent runs
+2. **Cache** — `get_corpus_index()` saves/loads all three structures as `corpus_cache.pkl` in the project root to avoid re-parsing on subsequent runs
 3. **Map** — `COMP_TO_DESCRIPTIONS` maps JOC comp_types to PHP AST description strings
 4. **Fill** — `synthesize()` walks the constraint tree:
    - `ControlComp` sublists become synthetic PHP control wrappers via `synthesize_region()`
@@ -78,7 +78,7 @@ Constraints are pickled nested lists. Each list's first element is a `ControlCom
 
 ### Corpus cache
 
-The first `--synth` run parses all ~509 seed files and saves the index to `seeds/corpus_cache.pkl`. Subsequent runs load the cache instantly. Use `--rebuild-cache` to force a fresh build.
+The first `--synth` or `--fuzz` run parses all ~509 seed files and saves the index to `corpus_cache.pkl` in the project root. Subsequent runs load the cache instantly. Use `--build-cache` to build the cache independently, or `--rebuild-cache` to force a fresh build during `--synth`/`--fuzz`.
 
 ### Pickle module remapping
 
@@ -94,6 +94,9 @@ python3 driver.py --synth jc/con_out/accessors-no-prototype.pickle --seeds seeds
 
 # Synthesize from all constraints, 2 variants each
 python3 driver.py --synth jc/con_out/ --seeds seeds/ --count 2 --out synth_out/
+
+# Build corpus cache independently with 16 parallel workers
+python3 driver.py --build-cache --seeds seeds/ -j 16
 
 # Force cache rebuild with 16 parallel workers
 python3 driver.py --synth jc/con_out/ --seeds seeds/ --rebuild-cache -j 16
@@ -126,7 +129,7 @@ python3 jc/js_walker.py path/to/file.js
 Both `driver.py` and `jc/js_walker.py` support `-j N` / `--jobs N` to distribute file processing across N worker processes using `multiprocessing.Pool`. Each file is parsed independently in its own worker, and results are merged in the main process. Defaults to 1 (sequential).
 
 Parallelism applies to the CPU-bound parsing and analysis phases:
-- `driver.py`: `build_corpus_index()` (used by `--synth`/`--fuzz` on cache miss) and `profile_corpus()` (used by `--profile`)
+- `driver.py`: `build_corpus_index()` (used by `--build-cache`, `--synth`/`--fuzz` on cache miss) and `profile_corpus()` (used by `--profile`)
 - `jc/js_walker.py`: `batch_generate()` (used by `--batch`)
 
 ### Programmatic use

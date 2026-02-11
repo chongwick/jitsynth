@@ -1,0 +1,89 @@
+<?php
+function f_0() {
+    return new Exception;
+}
+function f_1() {
+    $r = new ReflectionClass('Test2');
+    $m = $r->getStaticProperties();
+    $m['data2'] = 200;
+}
+function f_2() {
+    return false;
+}
+$pdo = MySQLPDOTest::factory();
+$test->a++;
+++$test->a;
+var_dump(getopt("abcd"));
+global $user, $host, $passwd, $db, $port, $socket;
+$this->mysqli = new mysqli($host, $user, $passwd, $db, $port, $socket);
+$result = $this->mysqli->query("SELECT NOW() AS my_time FROM DUAL");
+$result->close();
+$f = __DIR__."/data/test.txt.gz";
+$h = gzopen($f, 'r');
+var_dump(gzeof($h));
+$reflection = new ReflectionClass('\DateTime');
+$mutable = $reflection->newInstanceWithoutConstructor();
+C::$p++;
+class D {
+    public string $prop;
+}
+$d = new D();
+var_dump($d);
+$priorityQueue = new SplPriorityQueue();
+$priorityQueue->setExtractFlags(SplPriorityQueue::EXTR_BOTH);
+var_dump(filter_var("", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_HIGH));
+$cfg = <<<EOT
+[global]
+error_log = {{FILE:LOG}}
+[unconfined]
+listen = {{ADDR}}
+pm = dynamic
+pm.max_children = 5
+pm.start_servers = 1
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+php_admin_value[cgi.fix_pathinfo] = yes
+EOT;
+$code = <<<EOT
+<?php
+echo \$_SERVER["SCRIPT_NAME"] . "\n";
+echo \$_SERVER["ORIG_SCRIPT_NAME"] . "\n";
+echo \$_SERVER["SCRIPT_FILENAME"] . "\n";
+echo \$_SERVER["PATH_INFO"] . "\n";
+echo \$_SERVER["PHP_SELF"];
+EOT;
+$tester = new FPM\Tester($cfg, $code);
+$tester->start();
+$cfg = <<<EOT
+[global]
+error_log = {{FILE:LOG}}
+[unconfined]
+listen = {{ADDR}}
+pm = dynamic
+pm.max_children = 5
+pm.start_servers = 1
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+EOT;
+$code = <<<EOT
+<?php
+echo "Test\n";
+EOT;
+$tester = new FPM\Tester($cfg, $code);
+$tester->close();
+$max = 0x66666666;
+$db = MySQLPDOTest::factory();
+$db->exec("CREATE TABLE test_pecl_bug_5200 (bar INT NOT NULL, phase enum('please_select', 'I', 'II', 'IIa', 'IIb', 'III', 'IV'))");
+var_dump( range('A', 'H', 0.0) );
+set_exception_handler(null);
+class A
+{
+    use T1;
+}
+class B extends A
+{
+    use T2;
+}
+$b = new B();
+$b->aa();
+ob_start();

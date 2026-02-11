@@ -1,0 +1,10 @@
+<?php
+$dom = new DOMDocument;
+$tag = $dom->appendChild($dom->createElement("style"));
+$html = simplexml_import_dom($tag);
+unset($html[0]);
+$tag->append("foo");
+echo $dom->saveXML(), "\n";
+echo $dom->saveXML($tag), "\n";
+var_dump($html);
+?>

@@ -1,0 +1,9 @@
+<?php
+
+try {
+    var_dump(scandir(''));
+} catch (\ValueError $e) {
+    echo $e->getMessage() . "\n";
+}
+
+?>

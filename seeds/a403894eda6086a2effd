@@ -1,0 +1,7 @@
+<?php
+try {
+    range(0, pow(2.0, 100000000));
+} catch (\ValueError $e) {
+    echo $e->getMessage() . "\n";
+}
+?>

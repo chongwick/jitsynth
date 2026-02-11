@@ -1,0 +1,192 @@
+<?php
+function f_0() {
+    $str = 'Hello World';
+    $shm_key = ftok(__FILE__, 'p');
+    $shm_id1 = shmop_open($shm_key, 'c', 0644, strlen($str));
+    shmop_delete($shm_id1);
+    if (true) {
+        class A
+        {
+            public function & __get($name)
+            {
+                return $this->test;
+            }
+        }
+        class B extends A
+        {
+            private $test;
+        }
+        $b = new B;
+        var_dump($b->test);
+    }
+}
+$users = MailBox::USERS;
+$to = $users[0];
+$bcc = $users[2];
+foreach (['to' => $to, 'bcc' => $bcc] as $recipient => $mailAddress) {
+    $mailBox = MailBox::login($mailAddress);
+    $mail = $mailBox->getMailsBySubject($subject);
+    $mailBox->logout();
+
+    if ($mail->isAsExpected($from, $to, $subject, $message)) {
+        echo "Found the email. {$recipient} received.\n";
+    }
+
+    if ($mail->getHeader('X-Mailer') === $xMailer) {
+        echo "The specified x-Mailer exists.\n\n";
+    }
+}
+$mailBox = MailBox::login($mailAddress);
+$mailBox->logout();
+call_user_func(array("static","ok"));
+$options = stream_context_get_options($this->context);
+var_dump($options['dummy']['foo']);
+$cfg = <<<EOT
+[global]
+error_log = {{FILE:LOG}}
+[unconfined]
+listen = {{ADDR}}
+pm = dynamic
+pm.max_children = 5
+pm.start_servers = 1
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+php_admin_value[cgi.fix_pathinfo] = yes
+EOT;
+$code = <<<EOT
+<?php
+echo \$_SERVER["SCRIPT_NAME"] . "\n";
+echo \$_SERVER["ORIG_SCRIPT_NAME"] . "\n";
+echo \$_SERVER["SCRIPT_FILENAME"] . "\n";
+echo \$_SERVER["PATH_INFO"] . "\n";
+echo \$_SERVER["PHP_SELF"];
+EOT;
+$tester = new FPM\Tester($cfg, $code);
+$tester->start();
+var_dump(substr_count("aaa", "a", 0, 0));
+$fp = fopen (__FILE__, "r");
+fclose($fp);
+$depth0 = "depth02";
+$iterator = new RecursiveDirectoryIterator(__DIR__ . DIRECTORY_SEPARATOR . $depth0);
+$it = new RecursiveIteratorIterator($iterator);
+$it->next();
+$arrays = array (
+/*1*/  array(1, 2), // array with default keys and numeric values
+       array(1.1, 2.2), // array with default keys & float values
+       array( array(2), array(1)), // sub arrays
+       array(false,true), // array with default keys and boolean values
+       array(), // empty array
+       array(NULL), // array with NULL
+       array("a","aaaa","b","bbbb","c","ccccc"),
+
+       // associative arrays
+/*8*/  array(1 => "one", 2 => "two", 3 => "three"),  // explicit numeric keys, string values
+       array("one" => 1, "two" => 2, "three" => 3 ),  // string keys & numeric values
+       array( 1 => 10, 2 => 20, 4 => 40, 3 => 30),  // explicit numeric keys and numeric values
+       array( "one" => "ten", "two" => "twenty", "three" => "thirty"),  // string key/value
+       array("one" => 1, 2 => "two", 4 => "four"),  //mixed
+
+       // associative array, containing null/empty/boolean values as key/value
+/*13*/ array(NULL => "NULL", null => "null", "NULL" => NULL, "null" => null),
+       array(true => "true", false => "false", "false" => false, "true" => true),
+       array("" => "emptyd", '' => 'emptys', "emptyd" => "", 'emptys' => ''),
+       array(1 => '', 2 => "", 3 => NULL, 4 => null, 5 => false, 6 => true),
+       array('' => 1, "" => 2, NULL => 3, null => 4, false => 5, true => 6),
+
+       // array with repetitive keys
+/*18*/ array("One" => 1, "two" => 2, "One" => 10, "two" => 20, "three" => 3)
+);
+foreach($arrays as $array) {
+  echo "-- Iteration $iterator --\n";
+  // with default argument
+  echo "- with default argument -\n";
+  var_dump( array_reverse($array) );
+  // with all possible arguments
+  echo "- with \$preserve keys = true -\n";
+  var_dump( array_reverse($array, true) );
+  echo "- with \$preserve_keys = false -\n";
+  var_dump( array_reverse($array, false) );
+  $iterator++;
+}
+var_dump( array_reverse($array, false) );
+function foo($e) {
+    var_dump(__FUNCTION__."(): ".get_class($e)." thrown!");
+}
+function foo1($e) {
+    var_dump(__FUNCTION__."(): ".get_class($e)." thrown!");
+}
+var_dump(__FUNCTION__."(): ".get_class($e)." thrown!");
+$prefix = __DIR__ . DIRECTORY_SEPARATOR . "testBug61315" . DIRECTORY_SEPARATOR;
+$d0 = $prefix . "ソフト";
+$d1 =
+ith_cp($d0, 65001);
+get_basename_;
+function foo($ref, $alt) {
+    unset($GLOBALS['a']);
+    unset($GLOBALS['b']);
+    $GLOBALS['a'] = 1;
+    $GLOBALS['b'] = 2;
+
+    $org_a = $GLOBALS['a'];
+    $org_b = $GLOBALS['b'];
+
+    if ($ref) {
+        global $a, $b;
+    } else {
+        /* zval temp_var(NULL); // refcount = 1
+         * a = temp_var[x] // refcount = 2
+         */
+        $a = NULL;
+        $b = NULL;
+    }
+
+    var_dump($a, $b, $GLOBALS['a'], $GLOBALS['b']);
+    echo "--\n";
+    if ($alt) {
+        $a = &$GLOBALS['a'];
+        $b = &$GLOBALS['b'];
+    } else {
+        extract($GLOBALS, EXTR_REFS);
+    }
+    var_dump($a, $b, $GLOBALS['a'], $GLOBALS['b']);
+    echo "--\n";
+    $a = &$GLOBALS['a'];
+    $b = &$GLOBALS['b'];
+    var_dump($a, $b, $GLOBALS['a'], $GLOBALS['b']);
+    echo "--\n";
+    $GLOBALS['b'] = 3;
+    var_dump($a, $b, $GLOBALS['a'], $GLOBALS['b']);
+    echo "--\n";
+    $a = 4;
+    var_dump($a, $b, $GLOBALS['a'], $GLOBALS['b']);
+    echo "--\n";
+    $c = $b;
+    var_dump($b, $GLOBALS['b'], $c);
+    echo "--\n";
+    $b = 'x';
+    var_dump($a, $b, $GLOBALS['a'], $GLOBALS['b'], $c);
+    echo "--\n";
+    var_dump($org_a, $org_b);
+    echo "----";
+    if ($ref) echo 'r';
+    if ($alt) echo 'a';
+    echo "\n";
+}
+foo(true, true);
+$r = new ResourceBundle( 'en_US', BUNDLE );
+print_r( $r['testvector'] );
+$anon = new class {
+    public int $field;
+    function __construct() {
+        $this->field = 2;
+    }
+};
+var_dump($anon->field);
+$tester = new FPM\Tester($cfg);
+$tester->expectLogTerminatingNotices();
+$array_object = array();
+var_dump( end($array_object) );
+var_dump(filter_var("?><!@#$%^&*()}{~Qwertyuilfdsasdfgmnbvcxcvbn", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_LOW));
+ob_start();
+$im = imagecreate(800, 800);
+imageline($im, 650, 150, 650, 650, IMG_COLOR_STYLED);

@@ -1,0 +1,23 @@
+<?php
+function f_0() {
+    $tests = array(
+        'noon', 'midnight'
+    );
+    foreach ($tests as $test) {
+        $t = strtotime("2005-12-22 ". $test);
+        printf("%-10s => %s\n", $test, date(DATE_ISO8601, $t));
+    }
+    $t = strtotime("2005-12-22 ". $test);
+    $link = my_mysqli_connect($host, $user, $passwd, $db, $port, $socket);
+    $link->close();
+}
+$im = imagecreate(800, 800);
+imageline($im, 700, 100, 700, 600, IMG_COLOR_STYLED);
+$input = fopen(__DIR__ . DIRECTORY_SEPARATOR . 'gh10370.tar', 'r');
+$output = fopen(__DIR__ . DIRECTORY_SEPARATOR . 'gh10370_003' . DIRECTORY_SEPARATOR . 'testfile', 'w');
+var_dump(stream_copy_to_stream($input, $output, 10240, 0x200));
+$fname = __DIR__ . '/' . basename(__FILE__, '.php') . '.phar';
+$phar = new Phar($fname);
+var_dump($phar->getStub());
+$r = new ResourceBundle( 'en_US', BUNDLE );
+printf( "testbin: %s\n", bin2hex($r['testbin']) );

@@ -1,0 +1,7 @@
+<?php
+
+session_start();
+var_dump(session_cache_expire());
+var_dump(session_cache_limiter());
+var_dump(session_save_path());
+?>

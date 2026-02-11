@@ -1,0 +1,121 @@
+<?php
+function f_0() {
+    public function offsetExists($index): bool {
+            return isset($this->array[$index]);
+        }
+    return isset($this->array[$index]);
+}
+function f_1() {
+    class foo
+    {
+    // no members
+    }
+    abstract class abstractClass
+    {
+      abstract protected function getClassName();
+      public function printClassName () {
+        echo $this->getClassName() . "\n";
+      }
+    }
+    class concreteClass extends abstractClass
+    {
+      protected function getClassName() {
+        return "concreteClass";
+      }
+    }
+    interface IValue
+    {
+       public function setVal ($name, $val);
+       public function dumpVal ();
+    }
+    class Value implements IValue
+    {
+      private $vars = array ();
+    
+      public function setVal ( $name, $val ) {
+        $this->vars[$name] = $val;
+      }
+    
+      public function dumpVal () {
+        var_dump ( $vars );
+      }
+    }
+    class myClass
+    {
+      var       $foo_object;
+      public    $public_var;
+      public    $public_var1;
+      private   $private_var;
+      protected $protected_var;
+    
+      function __construct ( ) {
+        $this->foo_object = new foo();
+        $this->public_var = 10;
+        $this->public_var1 = new foo();
+        $this->private_var = new foo();
+        $this->protected_var = new foo();
+      }
+    }
+    $myClass_object = new myClass();
+    $foo_object = new foo();
+    $Value_object = new Value();
+    $concreteClass_object = new concreteClass();
+    $valid_objects = array(
+      new stdclass,
+      new foo,
+      new concreteClass,
+      new Value,
+      new myClass,
+      $myClass_object,
+      $myClass_object->foo_object,
+      $myClass_object->public_var1,
+      $foo_object,
+      $Value_object,
+      $concreteClass_object
+    );
+    $fp = php_cli_server_connect();
+    for ($i_2 = 0; $i_2 < 10; $i_2++) {
+        $host = PHP_CLI_SERVER_HOSTNAME;
+    }
+    return 0;
+}
+for ($i_3 = 0; $i_3 < 10; $i_3++) {
+    $pdo = PDOTest::test_factory(__DIR__ . '/common.phpt');
+    $reqOf3 = 'select 79 n union all select 80 union all select 81';
+    $stmt = $pdo->prepare($reqOf3);
+    $code = <<<EOT
+    <?php
+    echo 1;
+    EOT;
+    for ($i_4 = 0; $i_4 < 10; $i_4++) {
+        class TrampolineTest {
+            public function __call(string $name, array $arguments) {
+                echo 'Trampoline for ', $name, PHP_EOL;
+            }
+        }
+        $o = new TrampolineTest();
+        $callback1 = [$o, 'trampoline1'];
+        class bug8318 extends \SplFileObject
+        {
+            public function __construct()
+            {
+            }
+        
+            public function fpassthru(): int
+            {
+                return 0;
+            }
+        }
+        $cl = new bug8318;
+    }
+    $dom = Dom\HTMLDocument::createFromString(<<<HTML
+    <!DOCTYPE html>
+    <html>
+        <body>
+            <svg xmlns="http://www.w3.org/2000/svg" height="1"></svg>
+            <math></math>
+        </body>
+    </html>
+    HTML);
+    var_dump($dom->lookupNamespaceURI(""));
+}

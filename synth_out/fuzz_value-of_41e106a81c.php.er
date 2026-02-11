@@ -1,0 +1,59 @@
+<?php
+$index_array = array (1, 2, 3);
+function something() {
+        foreach(array(1, 2) as $value) {
+                for($i = 0; $i < 1; $i++) {
+                        continue 2;
+                }
+                return;
+        }
+}
+something();
+$s = "1234567890a";
+$i = "010";
+var_dump($s[$i], isset($s[$i]));
+mysqli_close($link);
+$code = null;
+$err = null;
+pfsockopen('udp://127.0.0.1', '63844', $code, $err, (PHP_INT_MIN/100000)-1);
+$flags = array(
+        MYSQLI_NOT_NULL_FLAG => 'NOT_NULL',
+        MYSQLI_PRI_KEY_FLAG => 'PRI_KEY',
+        MYSQLI_UNIQUE_KEY_FLAG => 'UNIQUE_KEY',
+        MYSQLI_MULTIPLE_KEY_FLAG => 'MULTIPLE_KEY',
+        MYSQLI_BLOB_FLAG => 'BLOB',
+        MYSQLI_UNSIGNED_FLAG	=> 'UNSIGNED',
+        MYSQLI_ZEROFILL_FLAG => 'ZEROFILL',
+        MYSQLI_AUTO_INCREMENT_FLAG => 'AUTO_INCREMENT',
+        MYSQLI_TIMESTAMP_FLAG	=> 'TIMESTAMP',
+        MYSQLI_SET_FLAG	=> 'SET',
+        MYSQLI_NUM_FLAG => 'NUM',
+        MYSQLI_PART_KEY_FLAG => 'PART_KEY',
+        // MYSQLI_GROUP_FLAG => 'MYSQLI_GROUP_FLAG' - internal usage only
+        (defined('MYSQLI_NO_DEFAULT_VALUE_FLAG') ? MYSQLI_NO_DEFAULT_VALUE_FLAG : 4096) => 'NO_DEFAULT_VALUE',
+        (defined('MYSQLI_BINARY_FLAG') ? MYSQLI_BINARY_FLAG : 128) => 'BINARY',
+        (defined('MYSQLI_ENUM_FLAG') ? MYSQLI_ENUM_FLAG : 256) => 'ENUM',
+        // MYSQLI_BINCMP_FLAG
+    );
+krsort($flags);
+$sert = "file://" . __DIR__ . "/san-cert.pem";
+$cpca = __DIR__ . "/san-cert.pem";
+$utfl = __DIR__ . "/sni_server_uk.pem";
+var_dump(openssl_x509_checkpurpose($sert, X509_PURPOSE_NS_SSL_SERVER, array($cpca), $utfl));
+$zip = new ZipArchive();
+$zip->close();
+var_dump(error_reporting());
+function f_0() {
+}
+$i = 0;
+class Foo {
+    public $dummy1;
+    public $dummy2;
+}
+$f = new Foo;
+class C extends stdClass {
+    public int $a;
+}
+$reflector = new ReflectionClass(C::class);
+$obj = new C();
+$reflector->resetAsLazyGhost($obj, function () {});

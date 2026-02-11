@@ -28,27 +28,42 @@ python3 driver.py --synth jc/con_out/accessors-no-prototype.pickle --seeds seeds
 python3 driver.py --synth jc/con_out/ --seeds seeds/ --count 2 --out synth_out/
 ```
 
-The first run parses all seed files and caches the index to `seeds/corpus_cache.pkl`. Subsequent runs load the cache instantly.
+The first run parses all seed files and caches the index to `corpus_cache.pkl` in the project root. Subsequent runs load the cache instantly. You can also build the cache independently:
+
+```bash
+# Build corpus cache without synthesizing
+python3 driver.py --build-cache --seeds seeds/ -j 16
+```
 
 ## CLI reference
 
 ```
-python3 driver.py --synth <PATH> [--seeds DIR] [--count N] [--out DIR] [--rebuild-cache]
+python3 driver.py --synth <PATH> [--seeds DIR] [--count N] [--out DIR] [--rebuild-cache] [-j N]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--synth PATH` | | Single `.pickle` file or directory of them |
+| `--fuzz DIR` | | Run infinite fuzzing loop using constraints from DIR |
+| `--build-cache` | | Build (or rebuild) the corpus cache and exit |
+| `--profile DIR` | | Profile all `.php` files in DIR, print per-type counts |
 | `--seeds DIR` | `./seeds` | Seed corpus directory |
 | `--count N` | `1` | Number of scripts to generate per constraint |
 | `--out DIR` | `./synth_out` | Output directory for generated `.php` files |
-| `--rebuild-cache` | | Force rebuild of the corpus cache |
+| `--rebuild-cache` | | Force rebuild of the corpus cache during `--synth`/`--fuzz` |
+| `-j N` | `1` | Number of parallel worker processes |
 
 Other modes:
 
 ```bash
+# Build corpus cache independently
+python3 driver.py --build-cache --seeds seeds/ -j 16
+
 # Profile seed corpus — print per-type statement counts
-python3 driver.py --profile seeds/
+python3 driver.py --profile seeds/ -j 16
+
+# Run infinite fuzzing loop
+python3 driver.py --fuzz jc/con_out/ --seeds seeds/ -j 16
 
 # Run dependency analyzer directly on a PHP file
 python3 php_dependency_analyzer.py script.php
@@ -64,7 +79,7 @@ php_helpers/                 PHP parser scripts
 jc/comps.py                  JOC component classes (ControlComp, DataComp)
 jc/con_out/                  ~497 constraint .pickle files
 seeds/                       ~509 PHP seed scripts (extensionless)
-seeds/corpus_cache.pkl       Auto-generated corpus cache
+corpus_cache.pkl             Auto-generated corpus cache
 synth_out/                   Generated PHP output
 ```
 

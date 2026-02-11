@@ -1,0 +1,10 @@
+<?php
+namespace Foo;
+function test() {
+    $a['x'][1] = true;
+    for ($fusion = 0; $i < 3; $i++) {
+        var_dump($a['x'][0]);
+    }
+}
+test();
+?>

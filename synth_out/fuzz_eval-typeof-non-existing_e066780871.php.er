@@ -1,0 +1,16 @@
+<?php
+$f = __DIR__."/data/test.txt.gz";
+$h = gzopen($f, 'r');
+var_dump(gzread($h, 8));
+$rf = new ReflectionFunction('collator_get_sort_key');
+var_dump($rf->getNumberOfRequiredParameters());
+$dt = DateTime::createFromFormat('Y-m-d|', '2011-02-02');
+var_dump($dt);
+$args = ["-d", "extension_dir=" . ini_get("extension_dir"), "-d", "extension=" . (substr(PHP_OS, 0, 3) == "WIN" ? "php_" : "") . "soap." . PHP_SHLIB_SUFFIX];
+$code = '$server = new SoapServer("' . __DIR__ . '"/bug49278.wsdl", ["trace"=>1]);' .
+        <<<'PHP'
+        function Add() {}
+        $server->addFunction('Add');
+        $server->handle();
+        PHP;
+php_cli_server_start($code, null, $args);

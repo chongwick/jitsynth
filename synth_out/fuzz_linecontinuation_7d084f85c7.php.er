@@ -1,0 +1,57 @@
+<?php
+$GLOBALS['b'] = 2;
+$a = NULL;
+$b = NULL;
+var_dump($a, $b, $GLOBALS['a'], $GLOBALS['b']);
+class SomeClass2 implements JsonSerializable {
+    public function jsonSerialize(): mixed {
+        return [(array)$this];
+    }
+}
+$class = new SomeClass2;
+$arr = [$class];
+var_dump(json_encode($arr));
+$ch = curl_init("https://localhost/username");
+$response = curl_exec($ch);
+var_dump(str_contains($response, "authorization"));
+$dbh = @pg_connect($conn_str);
+var_dump(pg_last_notice($dbh));
+class A {
+    public function __call($name, $args) {
+        for ($i = 0; $i < 5; $i++) {
+            yield $i;
+        }
+    }
+}
+$a = new A();
+foreach ($a->gen() as $n) {
+    var_dump($n);
+}
+var_dump($n);
+$string = str_repeat("A", 1024);
+highlight_string($string, true);
+var_dump(getopt("abcd"));
+class C {
+    function __serialize(): array {
+        global $list;
+        $list->pop();
+        return [];
+    }
+}
+$list = new SplDoublyLinkedList;
+$list->add(0, new C);
+printf("printf test 10: 123456789012345\n");
+$pdo = PDOTest::test_factory(__DIR__ . '/common.phpt');
+$pdo->exec("create temp table t2 as select 678 n, 'ok' status");
+$sql = "SELECT 11111 as `1`, 22222 as `2`";
+$link = my_mysqli_connect($host, $user, $passwd, $db, $port, $socket);
+$link->real_query($sql);
+$ch = curl_init("https://localhost/userpwd");
+curl_setopt($ch, CURLOPT_VERBOSE, true);
+$sert = "file://" . __DIR__ . "/san-cert.pem";
+var_dump(openssl_x509_checkpurpose($sert, X509_PURPOSE_SMIME_SIGN));
+$meta_res = $stmt->result_metadata();
+$field = $meta_res->fetch_field();
+printf("Flags        : %d\n", $field->flags);
+$mysql = new my_mysqli($host, $user, $passwd, $db, $port, $socket);
+$mysql->close();

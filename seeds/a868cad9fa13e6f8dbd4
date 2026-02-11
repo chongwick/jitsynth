@@ -1,0 +1,9 @@
+<?php
+
+try {
+    var_dump(json_decode('[]', false, 0x100000000));
+} catch (\ValueError $e) {
+    echo $e->getMessage() . \PHP_EOL;
+}
+
+?>

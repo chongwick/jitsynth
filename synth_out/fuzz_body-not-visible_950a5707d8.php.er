@@ -1,0 +1,27 @@
+<?php
+$mixedEndiannessFile = dirname(__FILE__).'/P1000506.JPG';
+$tags = exif_read_data($mixedEndiannessFile, 'EXIF', true, false);
+try {
+    $r = new ReflectionClass('stdClass');
+    var_dump(serialize($r));
+    ob_end_flush();
+} catch (Exception $e) {}
+if (true) {
+    $data = [
+        "name" => ["family" => AF_INET6, "addr" => "::1"],
+        "buffer_size" => 2000,
+        "controllen" => socket_cmsg_space(IPPROTO_IPV6, IPV6_PKTINFO) +
+                socket_cmsg_space(IPPROTO_IPV6, IPV6_TCLASS),
+    ];
+    $dom = new DOMDocument();
+    $xpath = new DOMXpath($dom);
+    foreach($xpath->query('/root/noexist') as $child) {
+        var_dump($child);
+    }
+    var_dump($child);
+}
+$counter = 0;
+ob_start(function ($buffer) use (&$c, &$counter) {
+        $c = 0;
+        ++$counter;
+}, 1);

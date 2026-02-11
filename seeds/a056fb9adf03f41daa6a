@@ -1,0 +1,9 @@
+<?php
+
+$c = "assert";
+
+$c(false);
+
+var_dump(array_map(assert(...), [true, true, false]));
+
+?>
