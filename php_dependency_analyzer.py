@@ -772,17 +772,21 @@ def get_source_slice(results, stmt_id, source):
     Args:
         results: list of result dicts from build_statement_dependencies()
         stmt_id: the statement index
-        source: the raw PHP file contents as a string
+        source: the raw PHP file contents as bytes or string
 
     Returns:
-        The source text for the statement, or None if positions are unavailable.
+        The source text for the statement as a string, or None if positions
+        are unavailable.
     """
     r = results[stmt_id]
     start = r.get("start_file_pos")
     end = r.get("end_file_pos")
     if start is None or end is None:
         return None
-    return source[start:end + 1]
+    raw = source[start:end + 1]
+    if isinstance(raw, bytes):
+        return raw.decode('utf-8', errors='ignore')
+    return raw
 
 
 def get_dependency_slice(results, stmt_id, source):
@@ -935,7 +939,7 @@ def main():
             ast = json.loads(stdout)
         except Exception as e:
             print(e);quit()
-        with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
+        with open(target_file, "rb") as f:
             source = f.read()
         results = build_statement_dependencies(ast)
         print_analysis(results, source)

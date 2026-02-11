@@ -1,4 +1,4 @@
-from php_dependency_analyzer import build_statement_dependencies, get_dependency_slice
+from php_dependency_analyzer import build_statement_dependencies, get_dependency_slice, get_dependency_closure, get_source_slice
 from jc.comps import ControlComp, DataComp
 import sys
 import subprocess
@@ -7,6 +7,7 @@ import pickle
 import os
 import argparse
 import random
+import re
 import math
 from secrets import token_hex
 from multiprocessing import Pool
@@ -61,7 +62,7 @@ def profile_script(script_results):
 
 def analyze_corpus(input_dir,output_dir):
     for seed in [os.path.join(input_dir,i) for i in os.listdir(input_dir)]:
-        with open(seed, "r", encoding="utf-8", errors="ignore") as f:
+        with open(seed, "rb") as f:
             source = f.read()
         results = build_statement_dependencies(_build_ast(seed))
         analysis = [source,results]
@@ -70,7 +71,7 @@ def analyze_corpus(input_dir,output_dir):
             pickle.dump(analysis,f)
 
 def analyze_file(seed):
-    with open(seed, "r", encoding="utf-8", errors="ignore") as f:
+    with open(seed, "rb") as f:
         source = f.read()
     results = build_statement_dependencies(_build_ast(seed))
     return source,results
@@ -155,9 +156,9 @@ def print_node(entry):
     if start_file_pos is None or end_file_pos is None:
         print(f"[{filepath} stmt {stmt_id}]: no file position available")
         return
-    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+    with open(filepath, "rb") as f:
         source = f.read()
-    print(source[start_file_pos:end_file_pos + 1])
+    print(source[start_file_pos:end_file_pos + 1].decode('utf-8', errors='ignore'))
 
 COMP_TO_DESCRIPTIONS = {
     # Control regions (ControlComp comp_type -> PHP description strings)
@@ -186,6 +187,13 @@ COMP_TO_DESCRIPTIONS = {
 }
 
 
+HOISTABLE_DESCRIPTIONS = {
+    "Stmt_Function (region)",
+    "Stmt_Class (region)",
+    "Stmt_Trait (region)",
+    "Stmt_Interface (region)",
+}
+
 CORPUS_CACHE_FILE = 'corpus_cache.pkl'
 
 
@@ -204,7 +212,7 @@ def _is_php_seed(filepath, filename):
 def _index_one_file(filepath):
     """Worker: parse a single seed file. Returns (filepath, source, results, entries) or None."""
     try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        with open(filepath, "rb") as f:
             source = f.read()
         ast = _build_ast_safe(filepath)
         if ast is None:
@@ -301,6 +309,17 @@ def get_corpus_index(seed_dir, rebuild=False, parallel=1):
     return node_type_index, file_cache, results_cache
 
 
+_DEF_NAME_RE = re.compile(
+    r'(?:function|class|trait|interface)\s+(\w+)', re.IGNORECASE
+)
+
+
+def _extract_def_name(source_text, node_type):
+    """Extract the defined name (function/class/trait/interface) from source text."""
+    m = _DEF_NAME_RE.search(source_text)
+    return m.group(1) if m else None
+
+
 _name_counter = 0
 
 def _next_name(prefix):
@@ -310,44 +329,85 @@ def _next_name(prefix):
     return name
 
 
-def pick_data_source(data_comp, node_type_index, file_cache, results_cache):
-    """Pick a random PHP source snippet matching a DataComp, including dependencies."""
+_MAX_THIS_RETRIES = 10
+
+
+def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
+                     in_method=False):
+    """Pick a random PHP source snippet matching a DataComp, including dependencies.
+
+    Returns (hoisted, inline) where hoisted contains definitions (functions,
+    classes, traits, interfaces) that must be placed outside control structures.
+    If in_method is False, retries up to _MAX_THIS_RETRIES times to avoid
+    snippets that use $this.
+    """
     descriptions = COMP_TO_DESCRIPTIONS.get(data_comp.comp_type, [])
     candidates = []
     for desc in descriptions:
         candidates.extend(node_type_index.get(desc, []))
     if not candidates:
-        return f"/* no match for {data_comp.comp_type} */"
-    entry = random.choice(candidates)
-    filepath, stmt_id, start_pos, end_pos = entry
-    if start_pos is None or end_pos is None:
-        return f"/* no position for {data_comp.comp_type} */"
-    source = file_cache.get(filepath)
-    if source is None:
-        return f"/* source not cached for {filepath} */"
-    results = results_cache.get(filepath)
-    if results is None:
-        # Fallback: just the single statement without deps
-        snippet = source[start_pos:end_pos + 1].strip()
-        if not snippet.endswith(';'):
-            snippet += ';'
-        return snippet
-    # Use dependency slice to include all required defining statements
-    dep_slice = get_dependency_slice(results, stmt_id, source)
-    # Ensure semicolon termination on the final line
-    lines = dep_slice.split('\n')
-    if lines and not lines[-1].rstrip().endswith(';'):
-        lines[-1] = lines[-1].rstrip() + ';'
-    return '\n'.join(lines)
+        return ([], f"/* no match for {data_comp.comp_type} */")
+
+    for _attempt in range(_MAX_THIS_RETRIES):
+        entry = random.choice(candidates)
+        filepath, stmt_id, start_pos, end_pos = entry
+        if start_pos is None or end_pos is None:
+            return ([], f"/* no position for {data_comp.comp_type} */")
+        source = file_cache.get(filepath)
+        if source is None:
+            return ([], f"/* source not cached for {filepath} */")
+        results = results_cache.get(filepath)
+        if results is None:
+            raw = source[start_pos:end_pos + 1]
+            snippet = raw.decode('utf-8', errors='ignore').strip() if isinstance(raw, bytes) else raw.strip()
+            if not snippet.endswith(';'):
+                snippet += ';'
+            if not in_method and '$this' in snippet:
+                continue
+            return ([], snippet)
+        # Split dependency closure into hoistable definitions and inline statements
+        closure = get_dependency_closure(results, stmt_id)
+        hoisted_parts = []
+        inline_parts = []
+        for sid in closure:
+            text = get_source_slice(results, sid, source)
+            if text is None:
+                continue
+            r = results[sid]
+            if r.get('description', '') in HOISTABLE_DESCRIPTIONS:
+                hoisted_parts.append((text, r.get('node_type', '')))
+            else:
+                inline_parts.append(text)
+        # Ensure semicolon termination on the final inline line
+        inline = '\n'.join(inline_parts)
+        lines = inline.split('\n')
+        if lines and not lines[-1].rstrip().endswith(';'):
+            lines[-1] = lines[-1].rstrip() + ';'
+        inline = '\n'.join(lines)
+        # Retry if snippet uses $this outside a method context
+        if not in_method and '$this' in inline:
+            continue
+        return (hoisted_parts, inline)
+
+    # Exhausted retries — return last result anyway
+    return (hoisted_parts, inline)
 
 
-def synthesize_region(region_list, node_type_index, file_cache, results_cache, indent=0):
-    """Synthesize PHP source for a nested control region."""
+def synthesize_region(region_list, node_type_index, file_cache, results_cache,
+                      indent=0, in_method=False):
+    """Synthesize PHP source for a nested control region.
+
+    Returns (hoisted_lines, region_lines) where hoisted_lines contains
+    definitions that must be placed outside all control structures.
+    """
     if not region_list:
-        return []
+        return [], []
     pad = "    " * indent
     ctrl = region_list[0]  # ControlComp
     ct = ctrl.comp_type
+    # Track whether we're inside a method/class context for $this filtering
+    child_in_method = in_method or ct in ("method", "class")
+    hoisted = []
     lines = []
 
     # Generate synthetic control wrapper
@@ -388,11 +448,13 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache, i
         lines.append(f"{body_pad}break;  // avoid infinite loop")
     for element in region_list[1:]:
         if isinstance(element, list):
-            lines.extend(synthesize_region(element, node_type_index, file_cache, results_cache, indent + 1))
+            sub_hoisted, sub_lines = synthesize_region(element, node_type_index, file_cache, results_cache, indent + 1, in_method=child_in_method)
+            hoisted.extend(sub_hoisted)
+            lines.extend(sub_lines)
         elif isinstance(element, DataComp):
-            snippet = pick_data_source(element, node_type_index, file_cache, results_cache)
-            # Indent each line of the (possibly multi-line) dependency slice
-            for line in snippet.split('\n'):
+            hoisted_parts, inline_code = pick_data_source(element, node_type_index, file_cache, results_cache, in_method=child_in_method)
+            hoisted.extend(hoisted_parts)
+            for line in inline_code.split('\n'):
                 lines.append(f"{body_pad}{line}")
         elif isinstance(element, ControlComp):
             # Bare ControlComp in body (shouldn't normally happen, treat as data)
@@ -406,7 +468,7 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache, i
     else:
         lines.append(f"{pad}}}")
 
-    return lines
+    return hoisted, lines
 
 
 def synthesize(constraint_env, node_type_index, file_cache, results_cache):
@@ -414,15 +476,33 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache):
     global _name_counter
     _name_counter = 0
 
-    lines = ["<?php"]
+    hoisted = []
+    body = []
     # constraint_env[0] is ControlComp('main'), skip it
     for element in constraint_env[1:]:
         if isinstance(element, list):
-            lines.extend(synthesize_region(element, node_type_index, file_cache, results_cache, indent=0))
+            sub_hoisted, sub_lines = synthesize_region(element, node_type_index, file_cache, results_cache, indent=0)
+            hoisted.extend(sub_hoisted)
+            body.extend(sub_lines)
         elif isinstance(element, DataComp):
-            lines.append(pick_data_source(element, node_type_index, file_cache, results_cache))
+            hoisted_parts, inline_code = pick_data_source(element, node_type_index, file_cache, results_cache)
+            hoisted.extend(hoisted_parts)
+            body.append(inline_code)
         elif isinstance(element, ControlComp):
-            lines.append(f"/* bare control: {element.comp_type} */")
+            body.append(f"/* bare control: {element.comp_type} */")
+    # Deduplicate hoisted definitions by name to avoid "Cannot redeclare" errors
+    # PHP function/class names are case-insensitive
+    seen_names = set()
+    unique_hoisted = []
+    for text, node_type in hoisted:
+        name = _extract_def_name(text, node_type)
+        if name:
+            key = name.lower()
+            if key in seen_names:
+                continue
+            seen_names.add(key)
+        unique_hoisted.append(text)
+    lines = ["<?php"] + unique_hoisted + body
     return "\n".join(lines) + "\n"
 
 

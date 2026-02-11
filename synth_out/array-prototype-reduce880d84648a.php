@@ -1,2 +1,0 @@
-<?php
-var_dump(preg_replace_callback_array([], ''));
