@@ -1,0 +1,54 @@
+<?php
+function f_0() {
+    $unset_var = 10;
+    class test
+    {
+      var $t = 10;
+      function __toString()
+      {
+        return "testObject";
+      }
+    }
+    $values = array(
+                // empty string
+      /* 1  */  "",
+                '',
+                // objects
+      /* 3  */  new test(),
+    
+                // undefined variable
+                @$undefined_var,
+    
+                // unset variable
+      /* 5  */  @$unset_var,
+    );
+    for($index = 0; $index < count($values); $index ++)
+    {
+      echo "-- Iteration $counter --\n";
+      $val = $values[$index];
+    
+      var_dump( array_fill($start_key , $num , $val) );
+    
+      $counter++;
+    }
+    $val = $values[$index];
+    return $i;
+}
+$dom = Dom\HTMLDocument::createEmpty();
+$container = $dom->appendChild(createElement($dom, "container"));
+$container->appendChild(createElement($dom, "HTML", "1"));
+function f_1() {
+    function byReference( & $array){
+        foreach($array as &$item){
+            $item['nanana'] = 'batman';
+            $item['superhero'] = 'robin';
+        }
+    }
+    foreach($array as &$item){
+            $item['nanana'] = 'batman';
+            $item['superhero'] = 'robin';
+        }
+    $item['superhero'] = 'robin';
+    return 0;
+}
+set_error_handler(function($_, $m) { throw new Exception($m); });

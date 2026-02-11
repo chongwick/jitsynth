@@ -1,9 +1,0 @@
-<?php
-$file = __DIR__ . "/bug71127.inc";
-
-file_put_contents($file, "<?php define('FOO', 'bad'); echo FOO;?>");
-
-define("FOO", "okey");
-
-include($file);
-?>

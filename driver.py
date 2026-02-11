@@ -20,7 +20,7 @@ class _CompsUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 def _clean():
-    os.system(f"git clean -fd -e php -e /ramdisk")
+    os.system(f"git clean -fd -e php -e seeds -e /ramdisk")
 
 
 def sanitize(php_file):

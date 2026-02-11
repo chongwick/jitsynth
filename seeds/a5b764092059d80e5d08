@@ -1,7 +1,0 @@
-<?php
-$fp = fopen(__DIR__."/test2.csv", "r");
-while(($line = fgetcsv($fp, 1024, escape: "\\"))) {
-    var_dump($line);
-}
-fclose($fp);
-?>

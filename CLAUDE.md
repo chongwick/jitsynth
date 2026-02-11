@@ -14,6 +14,7 @@ php_dependency_analyzer.py   Statement-level dependency graph builder
 php_to_ast.sh                Shell wrapper: PHP file -> JSON AST via nikic/php-parser
 php_helpers/                 PHP parser scripts (uses vendor/autoload.php)
 jc/comps.py                  JOC component classes (ControlComp, DataComp, ObjComp)
+jc/js_walker.py              JS AST walker — generates JOC constraints from JS seeds
 jc/con_out/                  ~497 constraint .pickle files
 seeds/                       ~509 PHP seed scripts (extensionless files)
 synth_out/                   Generated PHP output (created by --synth)
@@ -85,6 +86,8 @@ Constraint pickles were created with bare `comps` module imports. `_CompsUnpickl
 
 ## Usage
 
+### driver.py (PHP synthesis)
+
 ```bash
 # Synthesize from a single constraint
 python3 driver.py --synth jc/con_out/accessors-no-prototype.pickle --seeds seeds/
@@ -92,22 +95,46 @@ python3 driver.py --synth jc/con_out/accessors-no-prototype.pickle --seeds seeds
 # Synthesize from all constraints, 2 variants each
 python3 driver.py --synth jc/con_out/ --seeds seeds/ --count 2 --out synth_out/
 
-# Force cache rebuild
-python3 driver.py --synth jc/con_out/ --seeds seeds/ --rebuild-cache
+# Force cache rebuild with 16 parallel workers
+python3 driver.py --synth jc/con_out/ --seeds seeds/ --rebuild-cache -j 16
 
-# Profile seed corpus (standalone, does not use synthesizer cache)
-python3 driver.py --profile seeds/
+# Profile seed corpus with parallel processing
+python3 driver.py --profile seeds/ -j 16
+
+# Fuzz with parallel cache build
+python3 driver.py --fuzz jc/con_out/ --seeds seeds/ -j 16
 
 # Run dependency analyzer directly
 python3 php_dependency_analyzer.py script.php
 ```
+
+### jc/js_walker.py (JS constraint generation)
+
+```bash
+# Batch-generate constraints from JS seeds (sequential)
+python3 jc/js_walker.py --batch ../js_seeds ./con_out
+
+# Batch-generate with 16 parallel workers
+python3 jc/js_walker.py --batch ../js_seeds ./con_out -j 16
+
+# Analyze a single JS file (debug mode)
+python3 jc/js_walker.py path/to/file.js
+```
+
+### Parallel processing (`-j` / `--jobs`)
+
+Both `driver.py` and `jc/js_walker.py` support `-j N` / `--jobs N` to distribute file processing across N worker processes using `multiprocessing.Pool`. Each file is parsed independently in its own worker, and results are merged in the main process. Defaults to 1 (sequential).
+
+Parallelism applies to the CPU-bound parsing and analysis phases:
+- `driver.py`: `build_corpus_index()` (used by `--synth`/`--fuzz` on cache miss) and `profile_corpus()` (used by `--profile`)
+- `jc/js_walker.py`: `batch_generate()` (used by `--batch`)
 
 ### Programmatic use
 
 ```python
 from driver import get_corpus_index, load_constraint, synthesize
 
-node_type_index, file_cache, results_cache = get_corpus_index('./seeds')
+node_type_index, file_cache, results_cache = get_corpus_index('./seeds', parallel=8)
 constraint = load_constraint('jc/con_out/some-constraint.pickle')
 php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
 ```

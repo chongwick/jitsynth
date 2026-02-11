@@ -1,5 +1,0 @@
-<?php
-
-$dbConnection = new Com('ADODB.Connection');
-var_dump(gc_collect_cycles());
-?>

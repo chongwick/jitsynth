@@ -1,5 +1,0 @@
-<?php
-$dom = new DOMImplementation();
-$type = $dom->createDocumentType('html');
-var_dump($type->childNodes);
-?>

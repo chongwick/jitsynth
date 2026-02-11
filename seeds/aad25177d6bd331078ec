@@ -1,3 +1,0 @@
-<?php
-    var_dump(getimagesize(__DIR__ . "/test13pix.swf"));
-?>

@@ -1,3 +1,0 @@
-<?php
-echo mb_convert_case("People's issues versus people’s issues", MB_CASE_TITLE);
-?>

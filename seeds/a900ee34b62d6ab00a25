@@ -1,7 +1,0 @@
-<?php
-
-$info = opcache_get_status()['interned_strings_usage'];
-var_dump($info['used_memory'] + $info['free_memory']);
-var_dump($info['buffer_size']);
-
-?>

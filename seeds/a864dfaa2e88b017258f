@@ -1,8 +1,0 @@
-<?php
-$hash = password_hash(
-    "php",
-    PASSWORD_ARGON2I,
-    ['memory_cost' => 64 << 10, 'time_cost' => 4, 'threads' => 1]
-);
-var_dump(substr($hash, -1, 1) !== "\0");
-?>

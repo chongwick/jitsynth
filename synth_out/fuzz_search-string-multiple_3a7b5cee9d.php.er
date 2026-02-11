@@ -1,0 +1,95 @@
+<?php
+function f_0() {
+    class Box {
+        public ?Test $value;
+    }
+    global $box;
+    function test($box) {
+        var_dump($box->value = new Test);
+    }
+    $box = new Box();
+    test($box);
+    $document = new \DOMDocument();
+    $h1 = $document->getElementsByTagName('h1');
+    $tz_aus = new DateTimeZone('Australia/Sydney');
+    undefined_function();
+}
+function f_1() {
+    $cert = "-----BEGIN CERTIFICATE-----
+    MIIDXDCCAkSgAwIBAgIKq/f5U3FzthdKUzANBgkqhkiG9w0BAQUFADBcMRIwEAYD
+    VQQDEwlzZXRhcGRmLWExCTAHBgNVBAoTADEJMAcGA1UECxMAMSMwIQYJKoZIhvcN
+    AQkBFhRzdXBwb3J0QHNldGFzaWduLmNvbTELMAkGA1UEBhMCREUwHhcNMTUwOTA4
+    MDkzNDExWhcNMjAwOTA4MDkzNDExWjBcMRIwEAYDVQQDEwlzZXRhcGRmLWExCTAH
+    BgNVBAoTADEJMAcGA1UECxMAMSMwIQYJKoZIhvcNAQkBFhRzdXBwb3J0QHNldGFz
+    aWduLmNvbTELMAkGA1UEBhMCREUwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+    AoIBAQCkmTLvUIYfqAKC1CHVgABlemrFIVRm4JGeB0jIGofyrm3yVwR4YcK0eUmt
+    /0nbFfsFsU0/C9dXKZYD42t5YpLFsj666Z1EoU1CfSIW2bf0HaWVJ+oNT5twS3dv
+    RTzAcnPM44GxO4y6GUW6un0/bT/MZbFKbb3NI1L0mwY7EoqUXR68XxuHqWETaslm
+    Sbp1XvbLsJjgV9X3ihi7JC7A9kEzrKh+RBsXEXwlSv5JO2TUdwq9P4EbjqvgiaV1
+    vFNAArioX5pIUIm9ahAm8d7jjW6DFfV798rTzaQ3GJs0yC3UD6xhmbTbdC/D9Pot
+    8RGu89Fx6E+O5j4LwGH4kiYjgvYZAgMBAAGjIDAeMA8GCSqGSIb3LwEBCgQCBQAw
+    CwYDVR0PBAQDAgOYMA0GCSqGSIb3DQEBBQUAA4IBAQBCA8iXz7zxAmCWNZ0faiLm
+    aKw8u2PUq+EPKrGKc9Q70Ksw/e/EHvWrghFzmu5MOZRn/QIWq++sbbc8eOiaRDE8
+    lWCW596FLW4habXKw0sjDNcyEBArPgDp17O6NgHqI2U1KL1P2Y40e0YH2BWxNS+f
+    pmWZekjiC6jfId2JGsyPZUTX4USwthG4dFX0/BWYg+K7kXvQzMobes2NxW3Iqn8h
+    FUNgraCzlQMSfE2gwAMSUXTJubUGorj4LFYSiLIIJvf6KlmuR5uOIi5lSjSeZf5E
+    FLEHVhrz3o2icUeyb1K1BTAQRZ/H3GZ0QpgqSK5vmuV9C+rzezQMoy4/8UUnNPMt
+    -----END CERTIFICATE-----
+    ";
+    $timestamp = "2005-11-08T11:22:07+03:00";
+    function __doRequest($request, $location, $action, $version, $one_way = 0): string {
+        echo "$request\n";
+        ob_start();
+        $this->server->handle($request);
+        $response = ob_get_contents();
+        ob_end_clean();
+        return $response;
+      }
+    $logOnEvent = new LogOnEvent(34567, $timestamp);
+    class LogOnEvent {
+      public $audienceMemberId;
+      public $timestamp;
+    
+      function __construct($audienceMemberId, $timestamp) {
+        $this->audienceMemberId = $audienceMemberId;
+        $this->timestamp = $timestamp;
+      }
+    }
+    function __construct($version, $activityId, $messageId, $source, $logOnEvent=NULL, $logOffEvent=NULL) {
+        $this->version = $version;
+        $this->activityId = $activityId;
+        $this->messageId = $messageId;
+        $this->source = $source;
+        $this->logOnEvent = $logOnEvent;
+        $this->logOffEvent = $logOffEvent;
+      }
+    $this->logOnEvent = $logOnEvent;
+    ob_end_flush();
+    for ($i_2 = 0; $i_2 < 10; $i_2++) {
+        sprintf('%$s, %2$s %1$s', "a", "b");
+    }
+    $i = 1;
+    return $i;
+}
+$dirs = array("a", "ソ", "ゾ", "şŞıİğĞ", "多国語", "王", "汚れて掘る");
+
+mkdir($prefix);
+foreach ($
+mkdir($prefix . $d);
+}
+
+$old_cwd = getcwd();
+forea
+$now = $prefix . $d;
+    var_dump(chdir($now));
+    var_dump($dn = realpath("."));
+    var_dump($d == get_basename_with_cp($dn, 65001, false));
+}
+chdir($old_cwd);
+
+foreach (
+with_cp($dn, 65001, false));
+}
+chdir($old_cwd);
+
+foreach;

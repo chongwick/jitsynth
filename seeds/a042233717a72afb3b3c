@@ -1,4 +1,0 @@
-<?php
-$input[] = &$input;
-var_dump(array_pop($input), $input);
-?>

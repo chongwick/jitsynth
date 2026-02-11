@@ -1,6 +1,0 @@
-<?php
-$fp = fopen('php://input', 'r+');
-var_dump(fseek($fp, -1, SEEK_SET));
-var_dump(fseek($fp, -32, SEEK_CUR));
-fclose($fp);
-?>

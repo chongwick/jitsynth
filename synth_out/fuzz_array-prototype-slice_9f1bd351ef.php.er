@@ -1,0 +1,10 @@
+<?php
+#[\AllowDynamicProperties]
+class C {
+    public $b;
+    public function __construct() {
+        $this->a = new Canary();
+    }
+}
+$obj = new C();
+var_dump($obj);

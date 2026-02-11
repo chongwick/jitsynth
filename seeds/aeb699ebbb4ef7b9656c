@@ -1,4 +1,0 @@
-<?php
-$x = new SoapClient(__DIR__."/bug27722.wsdl");
-echo "ok\n";
-?>
