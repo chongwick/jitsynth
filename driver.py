@@ -189,6 +189,7 @@ COMP_TO_DESCRIPTIONS = {
 
 HOISTABLE_DESCRIPTIONS = {
     "Stmt_Function (region)",
+    "Stmt_ClassMethod (region)",
     "Stmt_Class (region)",
     "Stmt_Trait (region)",
     "Stmt_Interface (region)",
@@ -312,6 +313,15 @@ def get_corpus_index(seed_dir, rebuild=False, parallel=1):
 _DEF_NAME_RE = re.compile(
     r'(?:function|class|trait|interface)\s+(\w+)', re.IGNORECASE
 )
+
+_CLASS_ONLY_MODIFIERS_RE = re.compile(
+    r'\b(?:(?:public|protected|private|abstract|final|static)\s+)+(?=function\b)'
+)
+
+
+def _strip_class_modifiers(text):
+    """Strip PHP class-only modifiers (public, protected, etc.) from function declarations."""
+    return _CLASS_ONLY_MODIFIERS_RE.sub('', text)
 
 
 def _extract_def_name(source_text, node_type):
@@ -495,6 +505,9 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache):
     seen_names = set()
     unique_hoisted = []
     for text, node_type in hoisted:
+        # Strip class-only modifiers from methods hoisted outside a class
+        if node_type == 'Stmt_ClassMethod':
+            text = _strip_class_modifiers(text)
         name = _extract_def_name(text, node_type)
         if name:
             key = name.lower()
