@@ -339,6 +339,38 @@ def _next_name(prefix):
     return name
 
 
+_SIMPLE_VAR_RE = re.compile(r'^\$[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _is_simple_var(symbol):
+    """Check if a symbol is a simple scalar variable (e.g. $x, not $obj->prop)."""
+    return _SIMPLE_VAR_RE.match(symbol) is not None
+
+
+def _replace_variable(code, old_var, new_var):
+    """Replace a PHP variable name in source, matching whole identifiers only."""
+    pattern = re.escape(old_var) + r'(?![a-zA-Z0-9_\x80-\xff])'
+    return re.sub(pattern, lambda m: new_var, code)
+
+
+def _try_create_join(prev_defs, curr_free_uses, curr_inline):
+    """Try to create a join between two data slots.
+
+    Returns (join_assignment_str, modified_inline) or None.
+    """
+    joinable_defs = [d for d in prev_defs if _is_simple_var(d)]
+    joinable_uses = [u for u in curr_free_uses if _is_simple_var(u)]
+    if not joinable_defs or not joinable_uses:
+        return None
+    def_var = random.choice(joinable_defs)
+    use_var = random.choice(joinable_uses)
+    join_name = _next_name("join_var")
+    join_var = f"${join_name}"
+    join_assignment = f"{join_var} = {def_var};"
+    modified_inline = _replace_variable(curr_inline, use_var, join_var)
+    return (join_assignment, modified_inline)
+
+
 _MAX_THIS_RETRIES = 10
 
 
@@ -346,8 +378,11 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
                      in_method=False):
     """Pick a random PHP source snippet matching a DataComp, including dependencies.
 
-    Returns (hoisted, inline) where hoisted contains definitions (functions,
-    classes, traits, interfaces) that must be placed outside control structures.
+    Returns (hoisted, inline, primary_defs, free_uses) where hoisted contains
+    definitions (functions, classes, traits, interfaces) that must be placed
+    outside control structures; primary_defs are variables defined by the
+    selected statement; free_uses are variables used by the selected statement
+    that are not defined by any statement in the dependency closure.
     If in_method is False, retries up to _MAX_THIS_RETRIES times to avoid
     snippets that use $this.
     """
@@ -356,16 +391,16 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
     for desc in descriptions:
         candidates.extend(node_type_index.get(desc, []))
     if not candidates:
-        return ([], f"/* no match for {data_comp.comp_type} */")
+        return ([], f"/* no match for {data_comp.comp_type} */", set(), set())
 
     for _attempt in range(_MAX_THIS_RETRIES):
         entry = random.choice(candidates)
         filepath, stmt_id, start_pos, end_pos = entry
         if start_pos is None or end_pos is None:
-            return ([], f"/* no position for {data_comp.comp_type} */")
+            return ([], f"/* no position for {data_comp.comp_type} */", set(), set())
         source = file_cache.get(filepath)
         if source is None:
-            return ([], f"/* source not cached for {filepath} */")
+            return ([], f"/* source not cached for {filepath} */", set(), set())
         results = results_cache.get(filepath)
         if results is None:
             raw = source[start_pos:end_pos + 1]
@@ -374,7 +409,7 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
                 snippet += ';'
             if not in_method and '$this' in snippet:
                 continue
-            return ([], snippet)
+            return ([], snippet, set(), set())
         # Split dependency closure into hoistable definitions and inline statements
         closure = get_dependency_closure(results, stmt_id)
         hoisted_parts = []
@@ -397,14 +432,27 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
         # Retry if snippet uses $this outside a method context
         if not in_method and '$this' in inline:
             continue
-        return (hoisted_parts, inline)
+        # Compute def/use metadata for join points
+        primary = results[stmt_id]
+        primary_defs = primary.get('defs', set())
+        closure_defs = set()
+        for sid in closure:
+            closure_defs.update(results[sid].get('defs', set()))
+        free_uses = primary.get('uses', set()) - closure_defs
+        return (hoisted_parts, inline, primary_defs, free_uses)
 
     # Exhausted retries — return last result anyway
-    return (hoisted_parts, inline)
+    primary = results[stmt_id]
+    primary_defs = primary.get('defs', set())
+    closure_defs = set()
+    for sid in closure:
+        closure_defs.update(results[sid].get('defs', set()))
+    free_uses = primary.get('uses', set()) - closure_defs
+    return (hoisted_parts, inline, primary_defs, free_uses)
 
 
 def synthesize_region(region_list, node_type_index, file_cache, results_cache,
-                      indent=0, in_method=False):
+                      indent=0, in_method=False, join_rate=0.0):
     """Synthesize PHP source for a nested control region.
 
     Returns (hoisted_lines, region_lines) where hoisted_lines contains
@@ -452,23 +500,38 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache,
     else:
         lines.append(f"{pad}/* unknown region: {ct} */ {{")
 
-    # Process body elements
+    # Phase 1: collect body elements with metadata
     body_pad = "    " * (indent + 1)
+    elements = []  # (kind, hoisted_parts, content, defs, free_uses)
     if ct == "while":
         lines.append(f"{body_pad}break;  // avoid infinite loop")
     for element in region_list[1:]:
         if isinstance(element, list):
-            sub_hoisted, sub_lines = synthesize_region(element, node_type_index, file_cache, results_cache, indent + 1, in_method=child_in_method)
-            hoisted.extend(sub_hoisted)
-            lines.extend(sub_lines)
+            sub_hoisted, sub_lines = synthesize_region(element, node_type_index, file_cache, results_cache, indent + 1, in_method=child_in_method, join_rate=join_rate)
+            elements.append(('region', sub_hoisted, sub_lines, None, None))
         elif isinstance(element, DataComp):
-            hoisted_parts, inline_code = pick_data_source(element, node_type_index, file_cache, results_cache, in_method=child_in_method)
-            hoisted.extend(hoisted_parts)
-            for line in inline_code.split('\n'):
-                lines.append(f"{body_pad}{line}")
+            hoisted_parts, inline_code, defs, free_uses = pick_data_source(element, node_type_index, file_cache, results_cache, in_method=child_in_method)
+            elements.append(('data', hoisted_parts, inline_code, defs, free_uses))
         elif isinstance(element, ControlComp):
-            # Bare ControlComp in body (shouldn't normally happen, treat as data)
-            lines.append(f"{body_pad}/* bare control: {element.comp_type} */")
+            elements.append(('bare', [], f"/* bare control: {element.comp_type} */", None, None))
+
+    # Phase 2: assemble with joins
+    last_data_defs = None
+    for kind, h, content, defs, free_uses in elements:
+        hoisted.extend(h)
+        if kind == 'data':
+            if last_data_defs is not None and random.random() < join_rate:
+                result = _try_create_join(last_data_defs, free_uses, content)
+                if result:
+                    lines.append(f"{body_pad}{result[0]}")
+                    content = result[1]
+            for line in content.split('\n'):
+                lines.append(f"{body_pad}{line}")
+            last_data_defs = defs
+        elif kind == 'region':
+            lines.extend(content)
+        elif kind == 'bare':
+            lines.append(f"{body_pad}{content}")
 
     # Close wrapper
     if ct == "do_while":
@@ -481,25 +544,43 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache,
     return hoisted, lines
 
 
-def synthesize(constraint_env, node_type_index, file_cache, results_cache):
+def synthesize(constraint_env, node_type_index, file_cache, results_cache, join_rate=0.0):
     """Walk a JOC constraint tree and assemble a PHP script."""
     global _name_counter
     _name_counter = 0
 
-    hoisted = []
-    body = []
+    # Phase 1: collect elements with metadata
+    elements = []  # (kind, hoisted_parts, content, defs, free_uses)
     # constraint_env[0] is ControlComp('main'), skip it
     for element in constraint_env[1:]:
         if isinstance(element, list):
-            sub_hoisted, sub_lines = synthesize_region(element, node_type_index, file_cache, results_cache, indent=0)
-            hoisted.extend(sub_hoisted)
-            body.extend(sub_lines)
+            sub_hoisted, sub_lines = synthesize_region(element, node_type_index, file_cache, results_cache, indent=0, join_rate=join_rate)
+            elements.append(('region', sub_hoisted, sub_lines, None, None))
         elif isinstance(element, DataComp):
-            hoisted_parts, inline_code = pick_data_source(element, node_type_index, file_cache, results_cache)
-            hoisted.extend(hoisted_parts)
-            body.append(inline_code)
+            hoisted_parts, inline_code, defs, free_uses = pick_data_source(element, node_type_index, file_cache, results_cache)
+            elements.append(('data', hoisted_parts, inline_code, defs, free_uses))
         elif isinstance(element, ControlComp):
-            body.append(f"/* bare control: {element.comp_type} */")
+            elements.append(('bare', [], f"/* bare control: {element.comp_type} */", None, None))
+
+    # Phase 2: assemble with joins
+    hoisted = []
+    body = []
+    last_data_defs = None
+    for kind, h, content, defs, free_uses in elements:
+        hoisted.extend(h)
+        if kind == 'data':
+            if last_data_defs is not None and random.random() < join_rate:
+                result = _try_create_join(last_data_defs, free_uses, content)
+                if result:
+                    body.append(result[0])
+                    content = result[1]
+            body.append(content)
+            last_data_defs = defs
+        elif kind == 'region':
+            body.extend(content)
+        elif kind == 'bare':
+            body.append(content)
+
     # Deduplicate hoisted definitions by name to avoid "Cannot redeclare" errors
     # PHP function/class names are case-insensitive
     seen_names = set()
@@ -519,7 +600,7 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache):
     return "\n".join(lines) + "\n"
 
 
-def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1):
+def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1, join_rate=0.0):
     """Run an infinite fuzzing loop: synthesize, write, sanitize, repeat."""
     # Load all constraints
     pickle_files = sorted([
@@ -551,7 +632,7 @@ def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=
                 _clean()
             iteration += 1
             pf, constraint = random.choice(constraints)
-            php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
+            php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=join_rate)
             base_name = os.path.splitext(os.path.basename(pf))[0]
             out_name = f"fuzz_{base_name}_{token_hex(5)}.php"
             out_path = os.path.join(out_dir, out_name)
@@ -594,6 +675,9 @@ def main():
                         help='Build (or rebuild) the corpus cache and exit')
     parser.add_argument('--rebuild-cache', action='store_true',
                         help='Force rebuild of the corpus cache even if one exists')
+    parser.add_argument('--join-rate', type=float, default=0.0,
+                        help='Probability (0.0-1.0) of creating join variables between '
+                             'consecutive data statements (default: 0.0)')
     parser.add_argument('-j', '--jobs', type=int, default=1,
                         help='Number of parallel worker processes (default: 1)')
     args = parser.parse_args()
@@ -604,7 +688,8 @@ def main():
 
     elif args.fuzz:
         fuzz_loop(args.fuzz, args.seeds, args.out,
-                  rebuild_cache=args.rebuild_cache, parallel=args.jobs)
+                  rebuild_cache=args.rebuild_cache, parallel=args.jobs,
+                  join_rate=args.join_rate)
 
     elif args.synth:
         # Collect constraint pickle files
@@ -625,7 +710,7 @@ def main():
             constraint = load_constraint(pf)
             base_name = os.path.splitext(os.path.basename(pf))[0]+token_hex(5)
             for i in range(args.count):
-                php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
+                php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=args.join_rate)
                 if args.count == 1:
                     out_name = f"{base_name}.php"
                 else:
