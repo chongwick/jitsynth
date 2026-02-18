@@ -314,13 +314,52 @@ def _process_single_file(args):
     return (False, fname)
 
 
-def batch_generate(seed_dir, output_dir, parallel=1):
+def batch_generate(seed_dir, output_dir, parallel=1, recursive=False,
+                    skip_existing=False):
     os.makedirs(output_dir, exist_ok=True)
     success = 0
     fail = 0
+    skipped = 0
     failures = []
-    seeds = sorted([f for f in os.listdir(seed_dir) if f.endswith('.js')])
-    work = [(os.path.join(seed_dir, fname), fname, output_dir) for fname in seeds]
+
+    if recursive:
+        # Walk directories recursively; use relative path for unique pickle names
+        work = []
+        for root, _dirs, files in os.walk(seed_dir):
+            for f in files:
+                if not f.endswith('.js'):
+                    continue
+                filepath = os.path.join(root, f)
+                rel = os.path.relpath(filepath, seed_dir)
+                # Convert path separators to dashes for a flat output name
+                pickle_name = rel.replace(os.sep, '-').replace('.js', '.pickle')
+                if skip_existing:
+                    out_path = os.path.join(output_dir, pickle_name)
+                    if os.path.exists(out_path):
+                        skipped += 1
+                        continue
+                work.append((filepath, pickle_name.replace('.pickle', '.js'),
+                             output_dir))
+        work.sort(key=lambda x: x[1])
+    else:
+        seeds = sorted([f for f in os.listdir(seed_dir) if f.endswith('.js')])
+        if skip_existing:
+            filtered = []
+            for fname in seeds:
+                out_path = os.path.join(output_dir,
+                                        fname.replace('.js', '.pickle'))
+                if os.path.exists(out_path):
+                    skipped += 1
+                else:
+                    filtered.append(fname)
+            seeds = filtered
+        work = [(os.path.join(seed_dir, fname), fname, output_dir)
+                for fname in seeds]
+
+    total_work = len(work)
+    if skipped:
+        print(f"Skipping {skipped} already-generated pickle(s)")
+    print(f"Processing {total_work} JS file(s)...")
 
     if parallel > 1:
         with Pool(processes=parallel) as pool:
@@ -330,6 +369,9 @@ def batch_generate(seed_dir, output_dir, parallel=1):
                 else:
                     fail += 1
                     failures.append(fname)
+                done = success + fail
+                if done % 500 == 0:
+                    print(f"  [{done}/{total_work}] {success} ok, {fail} failed")
     else:
         for item in work:
             ok, fname = _process_single_file(item)
@@ -353,10 +395,17 @@ def main():
         seed_dir = sys.argv[2] if len(sys.argv) > 2 else '../js_seeds'
         output_dir = sys.argv[3] if len(sys.argv) > 3 else './con_out'
         jobs = 1
+        recursive = False
+        skip_existing = False
         for i, arg in enumerate(sys.argv):
             if arg in ('-j', '--jobs') and i + 1 < len(sys.argv):
                 jobs = int(sys.argv[i + 1])
-        batch_generate(seed_dir, output_dir, parallel=jobs)
+            elif arg in ('-r', '--recursive'):
+                recursive = True
+            elif arg == '--skip-existing':
+                skip_existing = True
+        batch_generate(seed_dir, output_dir, parallel=jobs,
+                       recursive=recursive, skip_existing=skip_existing)
     else:
         w = Walker(True)
         if len(sys.argv) > 1:
