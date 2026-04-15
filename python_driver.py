@@ -7,6 +7,7 @@ import os
 import argparse
 import random
 import re
+import subprocess
 import textwrap
 from secrets import token_hex
 from multiprocessing import Pool
@@ -28,7 +29,6 @@ def _clean():
 
 
 def sanitize(py_file):
-    import subprocess
     is_error = lambda x: os.path.exists(x + ".er")
     is_trash = lambda x: os.path.exists(x + ".tr")
     for i in range(2):
@@ -404,6 +404,62 @@ def _strip_dangling_blocks(text):
     return '\n'.join(result)
 
 
+_IMPORT_RE = re.compile(r'^(?:import\s|from\s\S+\s+import\s)')
+
+
+def _is_import_line(line):
+    """Check if a stripped line is an import statement."""
+    return _IMPORT_RE.match(line) is not None
+
+
+def _hoist_imports(lines):
+    """Move all top-level import lines to the front, deduplicating them.
+
+    Only hoists lines at zero indentation (top-level imports).
+    Handles multi-line imports (parenthesized or backslash-continued).
+    Returns (import_lines, remaining_lines).
+    """
+    imports = []
+    seen = set()
+    remaining = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        # Only hoist top-level imports (no leading whitespace)
+        if stripped and line == line.lstrip() and _is_import_line(stripped):
+            # Collect continuation lines for multi-line imports
+            collected = [line]
+            # Check for parenthesized multi-line import
+            if '(' in stripped and ')' not in stripped:
+                i += 1
+                while i < len(lines):
+                    collected.append(lines[i])
+                    if ')' in lines[i]:
+                        i += 1
+                        break
+                    i += 1
+            # Check for backslash continuation
+            elif stripped.endswith('\\'):
+                i += 1
+                while i < len(lines):
+                    collected.append(lines[i])
+                    if not lines[i].strip().endswith('\\'):
+                        i += 1
+                        break
+                    i += 1
+            else:
+                i += 1
+            full_import = '\n'.join(collected)
+            if full_import not in seen:
+                seen.add(full_import)
+                imports.append(full_import)
+        else:
+            remaining.append(line)
+            i += 1
+    return imports, remaining
+
+
 # ---------------------------------------------------------------------------
 # pick_data_source
 # ---------------------------------------------------------------------------
@@ -717,7 +773,12 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache, join_
             declared_names.add(key)
         unique_hoisted.append(text)
 
-    lines = unique_hoisted + body
+    # Flatten all multi-line strings into individual lines
+    all_lines = []
+    for item in unique_hoisted + body:
+        all_lines.extend(item.split('\n'))
+    imports, rest = _hoist_imports(all_lines)
+    lines = imports + rest
     return "\n".join(lines) + "\n"
 
 
