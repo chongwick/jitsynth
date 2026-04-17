@@ -1,0 +1,6 @@
+<?php
+$empty_webp = __DIR__ . "/gh13774.webp";
+file_put_contents($empty_webp, "");
+$im = imagecreatefromwebp($empty_webp);
+var_dump($im);
+?>

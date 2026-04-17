@@ -1,0 +1,7 @@
+<?php
+
+var_dump(gzfile(__DIR__."/data/test.txt.gz"));
+var_dump(gzfile(__DIR__."/data/test.txt.gz", true));
+
+echo "Done\n";
+?>

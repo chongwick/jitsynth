@@ -1,0 +1,7 @@
+<?php
+function test($foo) {
+    var_dump(0);
+    var_dump($foo[0]);
+}
+test("str");
+?>

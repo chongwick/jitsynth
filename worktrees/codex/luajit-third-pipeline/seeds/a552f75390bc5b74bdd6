@@ -1,0 +1,12 @@
+<?php
+
+final class Test {
+    public function getInt(): int {
+        return 42;
+    }
+    public function getInt2(): int {
+        return $this->getInt();
+    }
+}
+
+?>

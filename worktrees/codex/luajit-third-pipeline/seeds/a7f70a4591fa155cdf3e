@@ -1,0 +1,17 @@
+<?php
+$dt = new DateTime('@1604215800');
+$dt->setTimezone(new DateTimeZone('America/Boise'));
+echo "{$dt->format('Y-m-d H:i:s T')} | {$dt->getTimestamp()}\n";
+$dt->add(new DateInterval('PT1H'));
+echo "{$dt->format('Y-m-d H:i:s T')} | {$dt->getTimestamp()}\n";
+$dt->add(new DateInterval('PT1H'));
+echo "{$dt->format('Y-m-d H:i:s T')} | {$dt->getTimestamp()}\n";
+$dt->add(new DateInterval('PT1M'));
+echo "{$dt->format('Y-m-d H:i:s T')} | {$dt->getTimestamp()}\n\n";
+
+$dt = new DateTime('@1604219400');
+$dt->setTimezone(new DateTimeZone('UTC'));
+echo "{$dt->format('Y-m-d H:i:s T')} | {$dt->getTimestamp()}\r\n";
+$dt->setTimezone(new DateTimeZone('America/Boise'));
+echo "{$dt->format('Y-m-d H:i:s T')} | {$dt->getTimestamp()}\r\n";
+?>

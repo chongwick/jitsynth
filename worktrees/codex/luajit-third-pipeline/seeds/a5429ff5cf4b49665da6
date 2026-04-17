@@ -1,0 +1,9 @@
+<?php
+#[AllowDynamicProperties]
+class A {
+}
+function foo(int $x) {
+    $a = new A;
+    $a->foo = $x;
+}
+?>

@@ -1,0 +1,5 @@
+/opt/homebrew/bin/luajit: ...00255875qbld22f955dw0000gn/T/tmp6nlr8osh/assert_fail.lua:1: assertion failed!
+stack traceback:
+	[C]: in function 'assert'
+	...00255875qbld22f955dw0000gn/T/tmp6nlr8osh/assert_fail.lua:1: in main chunk
+	[C]: at 0x010271ae3c

@@ -1,0 +1,9 @@
+<?php
+$a[0] = &$a;
+
+try {
+	pcntl_sigwaitinfo($a,$a);
+} catch(\TypeError $e) {
+	echo $e->getMessage();
+}
+?>
