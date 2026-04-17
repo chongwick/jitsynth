@@ -141,13 +141,9 @@ def collect_defs(stmt):
             name = alias.asname if alias.asname else alias.name
             defs.add(name)
 
-    elif isinstance(stmt, ast.Global):
-        for name in stmt.names:
-            defs.add(name)
-
-    elif isinstance(stmt, ast.Nonlocal):
-        for name in stmt.names:
-            defs.add(name)
+    # NOTE: ast.Global and ast.Nonlocal are scope declarations, not definitions.
+    # They are intentionally excluded to avoid pulling them into dependency
+    # closures where they cause SyntaxError at the wrong scope level.
 
     elif isinstance(stmt, ast.With) or isinstance(stmt, ast.AsyncWith):
         for item in stmt.items:

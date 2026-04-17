@@ -237,7 +237,7 @@ def _next_name(prefix):
 # ---------------------------------------------------------------------------
 
 _CLASS_SCOPE_RE = re.compile(
-    r'\bself\.'
+    r'\bself\b'
     r'|\bcls\.'
     r'|\bsuper\(\)'
 )
@@ -248,14 +248,24 @@ def _has_class_scope_refs(text):
     return _CLASS_SCOPE_RE.search(text) is not None
 
 
+_RETURN_RE = re.compile(r'(?:^|\n)\s*return\b')
+
+
 def _needs_function_scope(text):
     """Check if text contains constructs that require a function scope."""
-    return 'yield' in text or 'await' in text
+    return 'yield' in text or 'await' in text or _RETURN_RE.search(text) is not None
 
 
 # Imports that won't be available in synthesized scripts
 _UNAVAILABLE_IMPORTS = re.compile(
-    r'\b(?:unittest|test\.support|test\.test_|doctest)\b'
+    r'\b(?:'
+    r'unittest|test\.support|test\.test_|doctest|'
+    r'_testcapi|_testinternalcapi|_test_|'
+    r'ctypes\.wintypes|winreg|_winapi|_msi|'
+    r'cwriter|pickletester|mapping_tests|'
+    r'asyncore|smtpd|WINFUNCTYPE|'
+    r'libclinic|compression|_pyrepl'
+    r')\b'
 )
 
 
@@ -294,6 +304,13 @@ _PYTHON_BUILTINS = {
     'SystemError', 'SystemExit', 'TabError', 'TimeoutError',
     'UnicodeDecodeError', 'UnicodeEncodeError', 'UnicodeError',
     'UnicodeTranslateError', 'UnboundLocalError', 'ZeroDivisionError',
+    # Common stdlib types and constants
+    'True', 'False', 'None',
+    'ConnectionAbortedError', 'ConnectionRefusedError', 'ConnectionResetError',
+    'DeprecationWarning', 'FutureWarning', 'PendingDeprecationWarning',
+    'ResourceWarning', 'RuntimeWarning', 'SyntaxWarning', 'UnicodeWarning',
+    'UserWarning', 'Warning', 'BytesWarning', 'EncodingWarning',
+    'KeyboardInterrupt',
 }
 
 
@@ -341,6 +358,8 @@ _DEF_NAME_RE = re.compile(
 )
 
 _MAX_CONTEXT_RETRIES = 10
+
+_LIKELY_UNDEFINED_RE = re.compile(r'^[A-Z][a-zA-Z0-9]+$')
 
 
 def _extract_def_name(source_text, node_type):
@@ -402,6 +421,19 @@ def _strip_dangling_blocks(text):
         prev_indent = indent
 
     return '\n'.join(result)
+
+
+_SCOPE_DECL_RE = re.compile(r'^\s*(nonlocal|global)\s+\w')
+
+
+def _strip_scope_declarations(text):
+    """Remove nonlocal/global declarations from extracted snippets.
+
+    These are scope declarations that cause SyntaxError when placed at
+    module level or in the wrong enclosing scope.
+    """
+    lines = text.split('\n')
+    return '\n'.join(l for l in lines if not _SCOPE_DECL_RE.match(l))
 
 
 _IMPORT_RE = re.compile(r'^(?:import\s|from\s\S+\s+import\s)')
@@ -523,12 +555,17 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
             else:
                 inline_parts.append(text)
 
-        # Filter hoisted parts: remove class-scope refs when outside a class
+        # Filter hoisted parts: remove class-scope refs when outside a class,
+        # and remove parts with unavailable imports
         if not in_method:
             hoisted_parts = [
                 (t, n) for t, n in hoisted_parts
                 if not _has_class_scope_refs(t)
             ]
+        hoisted_parts = [
+            (t, n) for t, n in hoisted_parts
+            if not _has_unavailable_imports(t)
+        ]
 
         # Check hoisted parts for name collisions
         filtered_hoisted = []
@@ -550,9 +587,9 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
             filtered_inline.append(text)
         inline_parts = filtered_inline
 
-        # Dedent all inline parts and strip dangling else/elif blocks
+        # Dedent all inline parts, strip dangling else/elif blocks, and remove scope declarations
         inline = '\n'.join(
-            _strip_dangling_blocks(_dedent_snippet(p)).strip()
+            _strip_scope_declarations(_strip_dangling_blocks(_dedent_snippet(p)).strip())
             for p in inline_parts
         )
 
@@ -562,6 +599,27 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
         if not in_function and _needs_function_scope(inline):
             continue
         if _has_unavailable_imports(inline):
+            continue
+
+        # Compute def/use metadata for join points (needed for suspicious-ref filter too)
+        primary = results[stmt_id]
+        primary_defs = primary.get('defs', set())
+        closure_defs = set()
+        for sid in closure:
+            closure_defs.update(results[sid].get('defs', set()))
+        free_uses = primary.get('uses', set()) - closure_defs
+
+        # Retry if free uses contain likely-undefined names (CamelCase class names
+        # or underscore-prefixed private names not in builtins).
+        # Only retry if 2+ suspicious names to avoid stalling on common patterns.
+        suspicious_count = sum(
+            1 for name in free_uses
+            if name not in _PYTHON_BUILTINS and (
+                _LIKELY_UNDEFINED_RE.match(name) or
+                (name.startswith('_') and name not in ('_', '__'))
+            )
+        )
+        if suspicious_count >= 2:
             continue
 
         # Register newly declared names from this pick
@@ -574,24 +632,10 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
             if name_match:
                 declared_names.add(name_match.group(1).lower())
 
-        # Compute def/use metadata for join points
-        primary = results[stmt_id]
-        primary_defs = primary.get('defs', set())
-        closure_defs = set()
-        for sid in closure:
-            closure_defs.update(results[sid].get('defs', set()))
-        free_uses = primary.get('uses', set()) - closure_defs
-
         return (hoisted_parts, inline, primary_defs, free_uses)
 
-    # Exhausted retries — return last result anyway
-    primary = results[stmt_id]
-    primary_defs = primary.get('defs', set())
-    closure_defs = set()
-    for sid in closure:
-        closure_defs.update(results[sid].get('defs', set()))
-    free_uses = primary.get('uses', set()) - closure_defs
-    return (hoisted_parts, inline, primary_defs, free_uses)
+    # Exhausted retries — return safe placeholder instead of leaking bad snippet
+    return ([], "pass  # retries exhausted", set(), set())
 
 
 # ---------------------------------------------------------------------------

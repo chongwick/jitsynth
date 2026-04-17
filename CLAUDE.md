@@ -223,7 +223,10 @@ py_source = synthesize(constraint, node_type_index, file_cache, results_cache)
 - **Symbol keys** are canonicalized: PHP uses `$a`, `$obj->prop`, `Foo::$bar`, `$a[*]`; Python uses `a`, `obj.attr`, `a[*]` (array indices collapsed)
 - **Single pass, linear scan** — no CFG. Correct for straight-line code; approximate across branches
 - **Python uses `ast` module**: No subprocess for parsing — `ast.parse()` is built-in and fast. Source extraction uses line/column positions (no byte-offset issues)
-- **Python context filtering**: `self.`/`cls.`/`super()` filtered outside class scope; `yield`/`await` filtered outside function scope; `unittest`/`test.support` imports filtered entirely
+- **Python context filtering**: `self`/`cls.`/`super()` filtered outside class scope; `yield`/`await`/`return` filtered outside function scope; `unittest`/`test.support`/CPython internal test modules/Windows-only modules filtered entirely
+- **Scope declaration stripping**: `global`/`nonlocal` statements are excluded from `collect_defs()` and stripped from extracted snippets, preventing SyntaxErrors when they appear at wrong scope levels
+- **Exhausted retry safety**: When all context-filter retries fail, `pick_data_source()` returns `pass` instead of leaking the last bad snippet
+- **Suspicious reference filter**: Free uses containing 2+ likely-undefined names (CamelCase non-builtins, underscore-prefixed privates) trigger a retry to reduce NameErrors
 
 ## Known limitations
 
@@ -231,9 +234,10 @@ py_source = synthesize(constraint, node_type_index, file_cache, results_cache)
 - **No aliasing**: `$a =& $b` doesn't link the two symbols
 - **Array index collapse**: `$a[0]` and `$a[1]` map to the same symbol `$a[*]`
 - **Dynamic variables**: `${$name}` is ignored
-- **Single scope**: No function/method boundary awareness — treats everything as one flat scope
+- **Single scope**: No function/method boundary awareness — treats everything as one flat scope. This is the dominant remaining source of NameErrors (~33% of generated Python scripts) since variables defined inside functions/classes in seed files don't carry over
 - **Cross-file deps**: Dependency slices come from the original seed file; variables from different seed files may still collide in the synthesized output
 - **Greedy slot-filling**: Each slot is filled independently and randomly — no global coherence across the synthesized script
+- **Large constraints**: Some JS-derived constraints have thousands of data slots (up to 6500+), making synthesis very slow. Constraints with >50 data slots can take minutes per file
 
 ## Extending
 
