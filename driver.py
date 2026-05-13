@@ -562,6 +562,139 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
     return (hoisted_parts, inline, primary_defs, free_uses)
 
 
+def pick_random_data_source(all_entries, file_cache, results_cache,
+                            declared_names=None):
+    """Like pick_data_source, but samples from a pre-pooled list of corpus entries
+    instead of looking up by DataComp type. Used by the JOC-free ablation."""
+    if not all_entries:
+        return ([], "/* empty corpus */", set(), set())
+    if declared_names is None:
+        declared_names = set()
+
+    hoisted_parts = []
+    inline = ""
+    primary_defs = set()
+    free_uses = set()
+
+    for _attempt in range(_MAX_CONTEXT_RETRIES):
+        entry = random.choice(all_entries)
+        filepath, stmt_id, start_pos, end_pos = entry
+        if start_pos is None or end_pos is None:
+            continue
+        source = file_cache.get(filepath)
+        if source is None:
+            continue
+        results = results_cache.get(filepath)
+        if results is None:
+            continue
+        closure = get_dependency_closure(results, stmt_id)
+        hoisted_parts = []
+        inline_parts = []
+        for sid in closure:
+            text = get_source_slice(results, sid, source)
+            if text is None:
+                continue
+            r = results[sid]
+            desc = r.get('description', '')
+            if desc in HOISTABLE_DESCRIPTIONS:
+                hoisted_parts.append((text, r.get('node_type', '')))
+            elif desc in CATCH_DESCRIPTIONS:
+                catch_defs = r.get('defs', set())
+                for var in catch_defs:
+                    inline_parts.append(f'{var} = new Exception("stub");')
+            else:
+                inline_parts.append(text)
+        # Top-level context: not in_method, not in_function
+        hoisted_parts = [
+            (t, n) for t, n in hoisted_parts if not _has_class_scope_refs(t)
+        ]
+        filtered_hoisted = []
+        for text, node_type in hoisted_parts:
+            name = _extract_def_name(text, node_type)
+            if name and name.lower() in declared_names:
+                continue
+            filtered_hoisted.append((text, node_type))
+        hoisted_parts = filtered_hoisted
+        filtered_inline = []
+        for text in inline_parts:
+            name_match = _DEF_NAME_RE.search(text)
+            if name_match and name_match.group(1).lower() in declared_names:
+                continue
+            filtered_inline.append(text)
+        inline_parts = filtered_inline
+        inline = '\n'.join(inline_parts)
+        lines = inline.split('\n')
+        if lines and lines[-1].strip() and not lines[-1].rstrip().endswith(';'):
+            lines[-1] = lines[-1].rstrip() + ';'
+        inline = '\n'.join(lines)
+        if _has_class_scope_refs(inline):
+            continue
+        if _needs_function_scope(inline):
+            continue
+        for text, node_type in hoisted_parts:
+            name = _extract_def_name(text, node_type)
+            if name:
+                declared_names.add(name.lower())
+        for text in inline_parts:
+            name_match = _DEF_NAME_RE.search(text)
+            if name_match:
+                declared_names.add(name_match.group(1).lower())
+        primary = results[stmt_id]
+        primary_defs = primary.get('defs', set())
+        closure_defs = set()
+        for sid in closure:
+            closure_defs.update(results[sid].get('defs', set()))
+        free_uses = primary.get('uses', set()) - closure_defs
+        return (hoisted_parts, inline, primary_defs, free_uses)
+
+    return (hoisted_parts, inline, primary_defs, free_uses)
+
+
+def ablate_random_synthesize(node_type_index, file_cache, results_cache,
+                             n=24, join_rate=0.0):
+    """JOC-free ablation: sample N statements uniformly from the corpus and
+    concatenate, including each statement's dependency closure."""
+    global _name_counter
+    _name_counter = 0
+
+    declared_names = set(name.lower() for name in _PHP_BUILTINS)
+
+    # Pool all entries across every description bucket
+    all_entries = []
+    for entries in node_type_index.values():
+        all_entries.extend(entries)
+
+    hoisted = []
+    body = []
+    last_data_defs = None
+    for _ in range(n):
+        h_parts, inline, defs, free_uses = pick_random_data_source(
+            all_entries, file_cache, results_cache, declared_names=declared_names)
+        hoisted.extend(h_parts)
+        if last_data_defs is not None and join_rate > 0.0 and random.random() < join_rate:
+            result = _try_create_join(last_data_defs, free_uses, inline)
+            if result:
+                body.append(result[0])
+                inline = result[1]
+        body.append(inline)
+        last_data_defs = defs
+
+    unique_hoisted = []
+    seen = set(declared_names)
+    for text, node_type in hoisted:
+        if node_type == 'Stmt_ClassMethod':
+            text = _strip_class_modifiers(text)
+        name = _extract_def_name(text, node_type)
+        if name:
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+        unique_hoisted.append(text)
+    lines = ["<?php"] + unique_hoisted + body
+    return "\n".join(lines) + "\n"
+
+
 def synthesize_region(region_list, node_type_index, file_cache, results_cache,
                       indent=0, in_method=False, in_function=False,
                       join_rate=0.0, declared_names=None):
@@ -804,6 +937,11 @@ def main():
                         help='Build (or rebuild) the corpus cache and exit')
     parser.add_argument('--rebuild-cache', action='store_true',
                         help='Force rebuild of the corpus cache even if one exists')
+    parser.add_argument('--ablate-random', action='store_true',
+                        help='JOC-free ablation: randomly sample statements from '
+                             'the corpus and concatenate (with dependency closures).')
+    parser.add_argument('--ablate-n', type=int, default=24,
+                        help='Number of statements per ablation script (default: 24)')
     parser.add_argument('--join-rate', type=float, default=0.0,
                         help='Probability (0.0-1.0) of creating join variables between '
                              'consecutive data statements (default: 0.0)')
@@ -814,6 +952,21 @@ def main():
     if args.build_cache:
         get_corpus_index(args.seeds, rebuild=True, parallel=args.jobs)
         return
+
+    elif args.ablate_random:
+        node_type_index, file_cache, results_cache = get_corpus_index(
+            args.seeds, rebuild=args.rebuild_cache, parallel=args.jobs)
+        os.makedirs(args.out, exist_ok=True)
+        for i in range(args.count):
+            php_source = ablate_random_synthesize(
+                node_type_index, file_cache, results_cache,
+                n=args.ablate_n, join_rate=args.join_rate)
+            out_name = f"ablate_{token_hex(5)}.php"
+            out_path = os.path.join(args.out, out_name)
+            with open(out_path, 'w') as f:
+                f.write(php_source)
+            print(f"  {out_path}")
+        print(f"\nGenerated {args.count} ablation file(s) in {args.out}/")
 
     elif args.fuzz:
         fuzz_loop(args.fuzz, args.seeds, args.out,
