@@ -476,8 +476,9 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
             if not in_function and _needs_function_scope(snippet):
                 continue
             return ([], snippet, set(), set())
-        # Split dependency closure into hoistable definitions and inline statements
-        closure = get_dependency_closure(results, stmt_id)
+        # Ablation: do not pull in the statement's dependencies — only the
+        # statement itself is emitted.
+        closure = [stmt_id]
         hoisted_parts = []
         inline_parts = []
         for sid in closure:
@@ -489,8 +490,6 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
             if desc in HOISTABLE_DESCRIPTIONS:
                 hoisted_parts.append((text, r.get('node_type', '')))
             elif desc in CATCH_DESCRIPTIONS:
-                # Replace bare catch blocks with stub variable assignments
-                # to avoid "unexpected token catch" errors
                 catch_defs = r.get('defs', set())
                 for var in catch_defs:
                     inline_parts.append(f'{var} = new Exception("stub");')
@@ -587,7 +586,8 @@ def pick_random_data_source(all_entries, file_cache, results_cache,
         results = results_cache.get(filepath)
         if results is None:
             continue
-        closure = get_dependency_closure(results, stmt_id)
+        # Ablation: do not pull in the statement's dependencies.
+        closure = [stmt_id]
         hoisted_parts = []
         inline_parts = []
         for sid in closure:
