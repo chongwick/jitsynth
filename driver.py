@@ -862,23 +862,31 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache, join_
     return "\n".join(lines) + "\n"
 
 
-def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1, join_rate=0.0):
-    """Run an infinite fuzzing loop: synthesize, write, sanitize, repeat."""
-    # Load all constraints
-    pickle_files = sorted([
-        os.path.join(constraints_dir, f)
-        for f in os.listdir(constraints_dir) if f.endswith('.pickle')
-    ])
-    if not pickle_files:
-        print(f"No .pickle files found in {constraints_dir}")
-        return
+def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1,
+              join_rate=0.0, ablate=True, ablate_n=24):
+    """Run an infinite fuzzing loop: synthesize, write, sanitize, repeat.
+
+    Defaults to JOC-free ablation (random statement sampling). Pass ablate=False
+    to synthesize from the JOC constraints in constraints_dir instead.
+    """
     constraints = []
-    for pf in pickle_files:
-        try:
-            constraints.append((pf, load_constraint(pf)))
-        except Exception as e:
-            print(f"Warning: skipping {pf}: {e}")
-    print(f"Loaded {len(constraints)} constraints from {constraints_dir}")
+    if not ablate:
+        # Load all constraints (only needed for JOC-driven synthesis)
+        pickle_files = sorted([
+            os.path.join(constraints_dir, f)
+            for f in os.listdir(constraints_dir) if f.endswith('.pickle')
+        ])
+        if not pickle_files:
+            print(f"No .pickle files found in {constraints_dir}")
+            return
+        for pf in pickle_files:
+            try:
+                constraints.append((pf, load_constraint(pf)))
+            except Exception as e:
+                print(f"Warning: skipping {pf}: {e}")
+        print(f"Loaded {len(constraints)} constraints from {constraints_dir}")
+    else:
+        print("Fuzzing mode: ablate-random (JOC-free)")
 
     node_type_index, file_cache, results_cache = get_corpus_index(
         seed_dir, rebuild=rebuild_cache, parallel=parallel)
@@ -893,9 +901,15 @@ def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=
             if iteration % 100 == 0:
                 _clean()
             iteration += 1
-            pf, constraint = random.choice(constraints)
-            php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=join_rate)
-            base_name = os.path.splitext(os.path.basename(pf))[0]
+            if ablate:
+                php_source = ablate_random_synthesize(
+                    node_type_index, file_cache, results_cache,
+                    n=ablate_n, join_rate=join_rate)
+                base_name = "ablate"
+            else:
+                pf, constraint = random.choice(constraints)
+                php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=join_rate)
+                base_name = os.path.splitext(os.path.basename(pf))[0]
             out_name = f"fuzz_{base_name}_{token_hex(5)}.php"
             out_path = os.path.join(out_dir, out_name)
             with open(out_path, 'w') as f:
@@ -942,6 +956,9 @@ def main():
                              'the corpus and concatenate (with dependency closures).')
     parser.add_argument('--ablate-n', type=int, default=24,
                         help='Number of statements per ablation script (default: 24)')
+    parser.add_argument('--no-ablate', action='store_true',
+                        help='In --fuzz, synthesize from JOC constraints instead of '
+                             'the default ablate-random sampling.')
     parser.add_argument('--join-rate', type=float, default=0.0,
                         help='Probability (0.0-1.0) of creating join variables between '
                              'consecutive data statements (default: 0.0)')
@@ -971,7 +988,8 @@ def main():
     elif args.fuzz:
         fuzz_loop(args.fuzz, args.seeds, args.out,
                   rebuild_cache=args.rebuild_cache, parallel=args.jobs,
-                  join_rate=args.join_rate)
+                  join_rate=args.join_rate, ablate=not args.no_ablate,
+                  ablate_n=args.ablate_n)
 
     elif args.synth:
         # Collect constraint pickle files
