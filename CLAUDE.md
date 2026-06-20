@@ -33,7 +33,7 @@ synth_out/                   Generated PHP output (created by --synth)
 
 1. **Dependency analyzer** (`php_dependency_analyzer.py`, Python only) — parses a PHP file's AST, flattens nested control flow into a linear statement list, computes def-use chains, and builds a per-statement dependency graph with transitive closure support. Run once to produce `corpus_cache.pkl`.
 
-2. **Synthesizer** (`driver.py --synth` / `./target/release/driver --synth`) — loads a JOC constraint tree, walks it top-down, and fills each slot with real PHP source from the seed corpus. Control regions get synthetic wrappers (`if`, `for`, `function`, etc.); data operations get randomly selected seed statements with their full dependency closures. **Two interchangeable implementations**: the original Python and the Rust port. Both read the same `corpus_cache.pkl` and emit equivalent output.
+2. **Synthesizer** (`driver.py --synth` / `./target/release/driver --synth`) — loads a JOC constraint tree, walks it top-down, and fills each slot with real PHP source from the seed corpus. Control regions get synthetic wrappers (`if`, `for`, `function`, etc.); data operations get randomly selected seed statements with their full dependency closures. **Two implementations**: the original Python and the Rust port. Both read the same `corpus_cache.pkl`. They are no longer output-equivalent: the Rust port emits JIT-warming control wrappers (hot loops, runtime-unknown branches, function/method warm-up calls, and type-stressing loop payloads — see Key design decisions), while `driver.py` still emits the original simple wrappers (`if (true)`, `for (... < 10 ...)`, uncalled functions, no payloads). Port these changes to `driver.py` before relying on Python output for JIT coverage.
 
 3. **Sanitizer** (`sanitize.sh`) — invoked by the fuzz loop; runs each synthesized script under PHP (with/without ASAN) and writes `<script>.er` if PHP reports an error, `<script>.tr` if it times out.
 
@@ -54,7 +54,7 @@ synth_out/                   Generated PHP output (created by --synth)
 2. **Cache** — `get_corpus_index()` saves/loads all three structures as `corpus_cache.pkl` in the project root. The Rust binary loads (but never builds) this cache.
 3. **Map** — `COMP_TO_DESCRIPTIONS` maps JOC comp_types to PHP AST description strings (table is identical in Python and Rust)
 4. **Fill** — `synthesize()` walks the constraint tree:
-   - `ControlComp` sublists become synthetic PHP control wrappers via `synthesize_region()`
+   - `ControlComp` sublists become synthetic PHP control wrappers via `synthesize_region()`. In the Rust port these wrappers are *JIT-warming* — hot loops, runtime-unknown branch conditions, warm-up call loops for synthesized functions/methods, and type-stressing payloads injected into hot loops (see Key design decisions).
    - `DataComp` leaves become real PHP source via `pick_data_source()`, which uses `get_dependency_slice()` to include all defining predecessors
 
 ### Rust port
@@ -65,7 +65,7 @@ Lives in `src/`. Builds with `cargo build --release` to `./target/release/driver
 - `--build-cache`, `--rebuild-cache`, `--profile`: the Rust binary shells out to `python3 driver.py` for these — they require PHP-AST parsing (`php_to_ast.sh` + `php_dependency_analyzer.py`) and are run-once operations.
 - `--rebuild-cache` combined with `--synth`/`--fuzz` triggers the Python cache rebuild, then the Rust binary loads the fresh cache.
 
-The Rust binary uses Rust's `rand` PRNG, so generated outputs differ run-to-run (as in Python) but are not byte-identical to a given Python run. Output *shape* and *correctness rate* are parity-verified (8724 outputs per full-corpus synth, ~99.6% PHP-syntax-valid in both).
+The Rust binary uses Rust's `rand` PRNG, so generated outputs differ run-to-run (as in Python) but are not byte-identical to a given Python run. Per-constraint *correctness rate* remains high (full-corpus synth of 8724 constraints, `php -l` clean on sampled output). As of the JIT-warming wrapper changes the Rust and Python *output shapes diverge* — the Rust port emits hot loops, `mt_rand`-guarded branches, warm-up call loops, and type-stressing loop payloads that `driver.py` does not.
 
 ### JOC constraint structure
 
@@ -168,7 +168,10 @@ php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
 ## Key design decisions
 
 - **Dependency slices, not bare statements**: `pick_data_source()` uses `get_dependency_slice()` to include all transitive variable-defining predecessors, preventing undefined variable errors
-- **Synthetic control wrappers**: Region headers (`if (true)`, `for ($i_0 = 0; ...)`, `function f_0()`) are generated rather than extracted from seeds, since extracting partial control structures via byte offsets is unreliable
+- **Synthetic control wrappers**: Region headers (`if`, `for ($i_0 = 0; ...)`, `function f_0()`) are generated rather than extracted from seeds, since extracting partial control structures via byte offsets is unreliable
+- **JIT-warming control wrappers (Rust only)**: Wrappers are shaped so the tracing JIT (`opcache.jit=tracing` in `sanitize.sh`) actually compiles the synthesized code. Loops are made hot and runnable: `for`/`while`/`do-while` all run `HOT_ITERS` (200) iterations (`while`/`do-while` use a synthetic `$wc_N`/`$dc_N` counter incremented at the end of the body — the old `while (true) { break; }` / `do { } while (false)` ran 0–1 times and were never traced). `if`/`else` conditions use `mt_rand(0, 1)` / `!mt_rand(0, 1)` instead of the constant-folded `true` / `!true`, so the JIT keeps the branch + type guards and both arms execute. `HOT_ITERS`/`WARM_CALLS` are `const`s at the top of `src/synth.rs`; 200 is a deliberate ceiling so deeply nested regions don't blow past the 120s sanitizer timeout.
+- **Function/method warm-up calls (Rust only)**: Every synthesized `function f_N`/`class C_N`/method is now *called* so `opcache.jit_hot_func` fires on the code we generate. `synthesize_region()` returns an `Option<Callable>`; the parent emits `for ($warm_N = 0; $warm_N < WARM_CALLS; ...) { f_N(); }` after a function, and a class instantiates itself and warm-calls each method (`$inst_N = new C_N(); for (...) { $inst_N->m_N(); }`). Previously these definitions were dead code — `func_call` data slots only ever called *seed* functions, never the synthesized ones.
+- **Type-stressing loop payloads (Rust only)**: Hotness alone barely moved JIT coverage (37 → 38.1%) — the bottleneck is *type/value diversity*, not control structure, and ~27% of the corpus is deopt/overflow/recovery-shaped (V8-derived) yet was filled with type-stable random PHP. So with probability `JIT_PAYLOAD_RATE` (0.85) each hot loop also gets a synthetic `jit_payload()` snippet (`$jv_N` vars) injected at the top of its body, keyed off the loop counter so the transition happens mid-trace. Five flavors: (0) int/float type instability, (1) int/numeric-string instability, (2) integer overflow across `PHP_INT_MAX` → float promotion, (3) `INF`/`NAN`/`-0.0` arithmetic + comparison, (4) a mixed-type operand pool through a random operator. These exercise the JIT's per-type codegen and side-exit / deopt / guard-recovery machinery. Operand/operator combinations are deliberately restricted to ones that **never fatal** under PHP 8 (no array arithmetic → no `TypeError`; no `/`/`%` → no `DivisionByZeroError`), verified by running all flavors under PHP 8.4 and a `php -l` sample pass that showed no payload-caused failures. `JIT_PAYLOAD_RATE` is a `const` in `src/synth.rs`; promote to a CLI flag if needed.
 - **Unique name counters**: `_next_name()` generates `f_0`, `f_1`, `C_0`, `i_0`, etc. to avoid name collisions across regions
 - **Extensionless file support**: Seed files lack `.php` extensions; `build_corpus_index()` accepts them by checking for `<?php` header
 - **Symbol keys** are canonicalized: `$a`, `$obj->prop`, `Foo::$bar`, `$a[*]` (array indices collapsed)
@@ -178,7 +181,8 @@ php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
 
 ## Known limitations
 
-- **No control flow modeling**: `if`/`else`/`while` branches are not modeled — dependencies are approximate across branches
+- **No control flow modeling**: `if`/`else`/`while` branches are not modeled — dependencies are approximate across branches. (The Rust wrappers now *execute* both branches at runtime via `mt_rand` conditions and run loops `HOT_ITERS` times, but the dependency analysis behind slot-filling is still branch-unaware.)
+- **Redeclaration in hot loops (Rust)**: A `function`/`class` region nested inside a loop region fatals with "Cannot redeclare" on the 2nd iteration. This predates the JIT-warming changes (loops always ran ≥2×) but now fires reliably since loops run `HOT_ITERS` times. Fix candidates: guard definitions with `if (!function_exists(...))`/`class_exists(...)`, or hoist all definitions out of loop bodies.
 - **No aliasing**: `$a =& $b` doesn't link the two symbols
 - **Array index collapse**: `$a[0]` and `$a[1]` map to the same symbol `$a[*]`
 - **Dynamic variables**: `${$name}` is ignored

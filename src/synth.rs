@@ -8,6 +8,19 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+/// Loop trip count for synthetic control regions. Large enough that the tracing
+/// JIT marks the loop hot (with jit_hot_loop=1) and explores side exits, small
+/// enough that deeply nested regions don't blow past the sanitizer timeout.
+const HOT_ITERS: u32 = 200;
+/// Number of times a synthesized function/method is called in its warm-up loop,
+/// so opcache.jit_hot_func fires on the code we actually generate.
+const WARM_CALLS: u32 = 300;
+/// Probability that a hot loop also gets a synthetic type-stressing payload
+/// (type instability, integer overflow, mixed-type arithmetic) injected into its
+/// body, exercising the JIT's per-type codegen and side-exit / deopt machinery.
+/// Tunable; promote to a CLI flag if needed.
+const JIT_PAYLOAD_RATE: f64 = 0.85;
+
 pub struct Synthesizer<'a> {
     pub corpus: &'a Corpus,
     pub join_rate: f64,
@@ -484,9 +497,75 @@ enum Element {
     Region {
         hoisted: Vec<(String, String)>,
         lines: Vec<String>,
+        callable: Option<Callable>,
     },
     Data(DataPick),
     Bare(String),
+}
+
+/// A synthesized definition that can be warmed up with repeated calls so the
+/// function/method JIT compiles it. `Func` is called as `name()`; `Method` is
+/// called by the enclosing class region as `$instance->name()`.
+enum Callable {
+    Func(String),
+    Method(String),
+}
+
+/// Self-contained, non-fatal PHP that drives type-unstable / overflow / mixed-type
+/// values through arithmetic inside a hot loop. `ctr` is the loop's index/counter
+/// variable name (e.g. "i_0"); the snippet keys its behavior off `$ctr` so the
+/// type/overflow transition happens partway through the loop, forcing the trace's
+/// type guards to fail and exercising the side-exit / deopt / per-type codegen.
+/// Operand/operator combinations are restricted to ones that never fatal under
+/// PHP 8 (no array arithmetic, no `/`/`%` by a possibly-zero divisor).
+fn jit_payload<R: Rng + ?Sized>(rng: &mut R, syn: &mut Synthesizer, ctr: &str) -> Vec<String> {
+    let a = format!("${}", syn.next_name("jv"));
+    let b = format!("${}", syn.next_name("jv"));
+    let c = format!("${}", syn.next_name("jv"));
+    let ci = format!("${}", ctr);
+    match rng.gen_range(0..5) {
+        // Type instability: $a alternates int/float every iteration, so the trace's
+        // type guard on $a fails repeatedly, forcing side exits and re-records.
+        0 => vec![
+            format!("{} = ({} & 1) ? 7 : 7.5;", a, ci),
+            format!("{} = {} * {} + {};", b, a, ci, a),
+        ],
+        // Type instability across the int / numeric-string boundary.
+        1 => vec![
+            format!("{} = ({} & 1) ? 42 : \"42\";", a, ci),
+            format!("{} = {} + {};", b, a, ci),
+        ],
+        // Integer overflow: $a + $ctr crosses PHP_INT_MAX partway through the loop,
+        // promoting int -> float and exercising the overflow-recovery path.
+        2 => vec![
+            format!("{} = PHP_INT_MAX - 5;", a),
+            format!("{} = {} + {};", b, a, ci),
+            format!("{} = PHP_INT_MIN + 5 - {};", c, ci),
+        ],
+        // Special float values (INF / NAN / -0.0) through arithmetic + comparison.
+        3 => {
+            let vals = ["INF", "NAN", "-0.0", "1.5", "0.0"];
+            let v = vals[rng.gen_range(0..vals.len())];
+            vec![
+                format!("{} = {} + {} * 2;", a, v, ci),
+                format!("{} = ({} <=> {}) + ({} == {});", b, a, ci, a, a),
+            ]
+        }
+        // Mixed-type operand pool driven through a random non-fatal operator.
+        _ => {
+            let pool = [
+                "PHP_INT_MAX", "PHP_INT_MIN", "1.5", "\"7\"", "true", "null", "0", "\"3.14\"",
+            ];
+            let l = pool[rng.gen_range(0..pool.len())];
+            let op = ["+", "-", "*", "."][rng.gen_range(0..4)];
+            let r = pool[rng.gen_range(0..pool.len())];
+            vec![
+                format!("{} = {};", a, l),
+                format!("{} = {} {} {};", b, r, op, ci),
+                format!("{} = {} {} {};", c, a, op, b),
+            ]
+        }
+    }
 }
 
 fn synthesize_region<R: Rng + ?Sized>(
@@ -497,9 +576,9 @@ fn synthesize_region<R: Rng + ?Sized>(
     in_method: bool,
     in_function: bool,
     declared_names: &mut HashSet<String>,
-) -> (Vec<(String, String)>, Vec<String>) {
+) -> (Vec<(String, String)>, Vec<String>, Option<Callable>) {
     if region.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), None);
     }
     let pad = "    ".repeat(indent);
     let ctrl_type = match &region[0] {
@@ -513,29 +592,54 @@ fn synthesize_region<R: Rng + ?Sized>(
     let mut hoisted: Vec<(String, String)> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
 
+    // Name generated for this region's header (function/class/method), so the
+    // parent can emit warm-up calls. Loop counter for while/do_while bodies.
+    let mut region_name: Option<String> = None;
+    let mut loop_counter: Option<String> = None;
+    // Index/counter variable of a loop region, used to drive the JIT payload.
+    let mut loop_var: Option<String> = None;
+
     match ct {
-        "if" => lines.push(format!("{}if (true) {{", pad)),
-        "else" => lines.push(format!("{}if (!true) {{", pad)),
+        // Runtime-unknown conditions so the JIT keeps the branch + type guards
+        // and both arms actually execute across iterations/runs.
+        "if" => lines.push(format!("{}if (mt_rand(0, 1)) {{", pad)),
+        "else" => lines.push(format!("{}if (!mt_rand(0, 1)) {{", pad)),
         "for" => {
             let vname = syn.next_name("i");
             lines.push(format!(
-                "{}for (${} = 0; ${} < 10; ${}++) {{",
-                pad, vname, vname, vname
+                "{}for (${} = 0; ${} < {}; ${}++) {{",
+                pad, vname, vname, HOT_ITERS, vname
             ));
+            loop_var = Some(vname);
         }
-        "while" => lines.push(format!("{}while (true) {{", pad)),
-        "do_while" => lines.push(format!("{}do {{", pad)),
+        "while" => {
+            let c = syn.next_name("wc");
+            lines.push(format!("{}${} = 0;", pad, c));
+            lines.push(format!("{}while (${} < {}) {{", pad, c, HOT_ITERS));
+            loop_var = Some(c.clone());
+            loop_counter = Some(c);
+        }
+        "do_while" => {
+            let c = syn.next_name("dc");
+            lines.push(format!("{}${} = 0;", pad, c));
+            lines.push(format!("{}do {{", pad));
+            loop_var = Some(c.clone());
+            loop_counter = Some(c);
+        }
         "func" => {
             let fname = syn.next_name("f");
             lines.push(format!("{}function {}() {{", pad, fname));
+            region_name = Some(fname);
         }
         "class" => {
             let cname = syn.next_name("C");
             lines.push(format!("{}class {} {{", pad, cname));
+            region_name = Some(cname);
         }
         "method" => {
             let mname = syn.next_name("m");
             lines.push(format!("{}public function {}() {{", pad, mname));
+            region_name = Some(mname);
         }
         "try" => lines.push(format!("{}try {{", pad)),
         "catch" => lines.push(format!("{}if (true) {{", pad)),
@@ -545,14 +649,22 @@ fn synthesize_region<R: Rng + ?Sized>(
     }
 
     let body_pad = "    ".repeat(indent + 1);
-    let mut elements: Vec<Element> = Vec::new();
-    if ct == "while" {
-        lines.push(format!("{}break;  // avoid infinite loop", body_pad));
+
+    // Drive type-unstable / overflow / mixed-type values through this hot loop so
+    // the JIT exercises its per-type codegen and side-exit / deopt machinery.
+    if let Some(cv) = &loop_var {
+        if rng.gen::<f64>() < JIT_PAYLOAD_RATE {
+            for line in jit_payload(rng, syn, cv) {
+                lines.push(format!("{}{}", body_pad, line));
+            }
+        }
     }
+
+    let mut elements: Vec<Element> = Vec::new();
     for child in &region[1..] {
         match child {
             Node::Region(sub) => {
-                let (sub_h, sub_l) = synthesize_region(
+                let (sub_h, sub_l, sub_c) = synthesize_region(
                     rng,
                     syn,
                     sub,
@@ -564,6 +676,7 @@ fn synthesize_region<R: Rng + ?Sized>(
                 elements.push(Element::Region {
                     hoisted: sub_h,
                     lines: sub_l,
+                    callable: sub_c,
                 });
             }
             Node::Comp(CompKind::Data, t) => {
@@ -584,12 +697,26 @@ fn synthesize_region<R: Rng + ?Sized>(
     }
 
     let mut last_data_defs: Option<HashSet<String>> = None;
+    let mut method_names: Vec<String> = Vec::new();
     let join_rate = syn.join_rate;
     for el in elements {
         match el {
-            Element::Region { hoisted: h, lines: ls } => {
+            Element::Region { hoisted: h, lines: ls, callable } => {
                 hoisted.extend(h);
                 lines.extend(ls);
+                match callable {
+                    // Warm up a freshly defined function so the function JIT
+                    // compiles it; methods bubble up to the enclosing class.
+                    Some(Callable::Func(name)) => {
+                        let w = syn.next_name("warm");
+                        lines.push(format!(
+                            "{}for (${} = 0; ${} < {}; ${}++) {{ {}(); }}",
+                            body_pad, w, w, WARM_CALLS, w, name
+                        ));
+                    }
+                    Some(Callable::Method(name)) => method_names.push(name),
+                    None => {}
+                }
             }
             Element::Data(mut pick) => {
                 hoisted.extend(pick.hoisted.clone());
@@ -614,13 +741,45 @@ fn synthesize_region<R: Rng + ?Sized>(
         }
     }
 
+    // Advance the counter for the counter-driven loops before closing them.
+    if let Some(c) = &loop_counter {
+        lines.push(format!("{}${}++;", body_pad, c));
+    }
+
     match ct {
-        "do_while" => lines.push(format!("{}}} while (false);", pad)),
+        "do_while" => {
+            let c = loop_counter.as_deref().unwrap_or("__dc");
+            lines.push(format!("{}}} while (${} < {});", pad, c, HOT_ITERS));
+        }
         "try" => lines.push(format!("{}}} catch (Exception $e) {{}}", pad)),
         _ => lines.push(format!("{}}}", pad)),
     }
 
-    (hoisted, lines)
+    // A synthesized class: instantiate it and warm-call its methods so the
+    // method JIT compiles them.
+    if ct == "class" && !method_names.is_empty() {
+        if let Some(cname) = &region_name {
+            let inst = syn.next_name("inst");
+            lines.push(format!("{}${} = new {}();", pad, inst, cname));
+            let w = syn.next_name("warm");
+            lines.push(format!(
+                "{}for (${} = 0; ${} < {}; ${}++) {{",
+                pad, w, w, WARM_CALLS, w
+            ));
+            for m in &method_names {
+                lines.push(format!("{}    ${}->{}();", pad, inst, m));
+            }
+            lines.push(format!("{}}}", pad));
+        }
+    }
+
+    let self_callable = match ct {
+        "func" => region_name.map(Callable::Func),
+        "method" => region_name.map(Callable::Method),
+        _ => None,
+    };
+
+    (hoisted, lines, self_callable)
 }
 
 pub fn synthesize<R: Rng + ?Sized>(
@@ -640,7 +799,7 @@ pub fn synthesize<R: Rng + ?Sized>(
     for child in constraint.iter().skip(1) {
         match child {
             Node::Region(sub) => {
-                let (sub_h, sub_l) = synthesize_region(
+                let (sub_h, sub_l, sub_c) = synthesize_region(
                     rng,
                     &mut syn,
                     sub,
@@ -652,6 +811,7 @@ pub fn synthesize<R: Rng + ?Sized>(
                 elements.push(Element::Region {
                     hoisted: sub_h,
                     lines: sub_l,
+                    callable: sub_c,
                 });
             }
             Node::Comp(CompKind::Data, t) => {
@@ -676,9 +836,17 @@ pub fn synthesize<R: Rng + ?Sized>(
     let mut last_data_defs: Option<HashSet<String>> = None;
     for el in elements {
         match el {
-            Element::Region { hoisted: h, lines: ls } => {
+            Element::Region { hoisted: h, lines: ls, callable } => {
                 hoisted.extend(h);
                 body.extend(ls);
+                // Warm up top-level functions so the function JIT compiles them.
+                if let Some(Callable::Func(name)) = callable {
+                    let w = syn.next_name("warm");
+                    body.push(format!(
+                        "for (${} = 0; ${} < {}; ${}++) {{ {}(); }}",
+                        w, w, WARM_CALLS, w, name
+                    ));
+                }
             }
             Element::Data(mut pick) => {
                 hoisted.extend(pick.hoisted.clone());
