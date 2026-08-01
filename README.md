@@ -9,6 +9,8 @@ jitsynth connects two sides:
 - **JOC constraints** — nested trees of `ControlComp` and `DataComp` nodes describing the structural shape of JIT-exercising programs (e.g. "a function containing a for loop with an update, followed by three function calls")
 - **PHP seed corpus** — ~509 real PHP scripts, analyzed at the statement level with dependency tracking
 
+Beyond raw structure, JOCs also capture JIT-relevant metadata inferred from the JS seed (see `jc/type_infer.py`): each data op's **value type** and whether a variable write keeps it **type-stable** or transitions it (a deopt trigger); each loop's **trip count** and whether it is **type-stable across the back-edge**; and each function call's **callee identity** plus whether that function is **called repeatedly** (so it goes hot). See CLAUDE.md for the full field reference. These annotations are captured today but not yet used by the synthesizer.
+
 The synthesizer walks a constraint tree top-down and greedily fills each slot:
 - **Control regions** (if, for, while, function, class, try, ...) get synthetic PHP wrappers
 - **Data operations** (assign, func_call, update, return, ...) get randomly selected real PHP statements from the seed corpus, along with all their variable-defining dependencies
@@ -77,7 +79,8 @@ php_dependency_analyzer.py   Statement-level dependency graph builder
 php_to_ast.sh                PHP file -> JSON AST via nikic/php-parser
 php_helpers/                 PHP parser scripts
 jc/comps.py                  JOC component classes (ControlComp, DataComp)
-jc/con_out/                  ~497 constraint .pickle files
+jc/type_infer.py             JS type-stability inference (types, trip counts, call identity)
+jc/con_out/                  ~8724 constraint .pickle files (type-annotated)
 seeds/                       ~509 PHP seed scripts (extensionless)
 corpus_cache.pkl             Auto-generated corpus cache
 synth_out/                   Generated PHP output

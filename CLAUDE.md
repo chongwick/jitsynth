@@ -14,8 +14,9 @@ php_dependency_analyzer.py   Statement-level dependency graph builder
 php_to_ast.sh                Shell wrapper: PHP file -> JSON AST via nikic/php-parser
 php_helpers/                 PHP parser scripts (uses vendor/autoload.php)
 jc/comps.py                  JOC component classes (ControlComp, DataComp, ObjComp)
+jc/type_infer.py             JS type-stability inference (types, trip counts, call identity)
 jc/js_walker.py              JS AST walker — generates JOC constraints from JS seeds
-jc/con_out/                  ~497 constraint .pickle files
+jc/con_out/                  ~8724 constraint .pickle files (type-annotated)
 seeds/                       ~509 PHP seed scripts (extensionless files)
 synth_out/                   Generated PHP output (created by --synth)
 ```
@@ -54,10 +55,39 @@ Constraints are pickled nested lists. Each list's first element is a `ControlCom
 
 ```
 [ControlComp('main'),
-  [ControlComp('func'), DataComp('assign'), DataComp('return')],
-  DataComp('func_call'),
-  DataComp('func_call')]
+  [ControlComp('for', type_stable=True, trip_count=100),
+    DataComp('assign', type='int', stable=True)],
+  DataComp('func_call', callee='f', repeated=True),
+  DataComp('func_call', callee='f', repeated=True)]
 ```
+
+### Type-stability annotations
+
+Beyond structural shape, comps carry inferred JIT-relevant metadata (see
+`jc/type_infer.py`; all fields are optional with backward-compatible defaults,
+so pre-annotation pickles still load). JavaScript is dynamically typed, so these
+are *inferred* by an abstract-interpretation pre-pass over the JS AST, run
+before the walk in `js_walker.generate_constraints`. The inference is
+conservative: anything it can't prove degrades to `mixed` / `None`.
+
+**`DataComp` fields:**
+
+| Field | Applies to | Meaning |
+|---|---|---|
+| `type` | all data ops | Inferred value type from the lattice `int / float / string / bool / null / undefined / array / object / function / mixed`. `int` and `float` are kept distinct so an `int→float` write reads as a transition. |
+| `stable` | var writes (`var_dec`/`assign`/`update`) | `True` if the write keeps the variable monomorphic, `False` if it transitions the variable to a new type, `None` if not a tracked write. Steady-state within loops (loop bodies are analyzed to a fixpoint). |
+| `callee` | `func_call` | Identity key of the called function (`"f"`, `"obj.method"`), or `None` if undeterminable. |
+| `repeated` | `func_call` | `True` if this `callee` is called ≥2× anywhere in the JOC (so the function goes hot / its call sites repeat), `False` if called once, `None` if callee unknown. Set by a whole-JOC post-pass. |
+
+**`ControlComp` fields:**
+
+| Field | Applies to | Meaning |
+|---|---|---|
+| `type_stable` | loops (`for`/`while`/`do_while`) | `True` if every loop-carried variable keeps its type across the back-edge (the monomorphic hot loop a tracing JIT specializes on), `False` for a deopt-inducing loop, `None` if not applicable. |
+| `trip_count` | loops | Statically inferred iteration count. Computed for counted `for` loops (integer bounds/step) and `for-of`/`for-in` over array/string literals; `None` for `while`/`do_while` and data-dependent loops. Drives whether a loop crosses the JIT hot-loop threshold. |
+
+These annotations are **captured but not yet honored** by the synthesizer —
+`driver.py` reads only `comp_type` when filling slots.
 
 ### COMP_TO_DESCRIPTIONS mapping
 

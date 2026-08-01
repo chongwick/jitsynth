@@ -8,6 +8,8 @@ import sys
 import pickle
 from multiprocessing import Pool
 from comps import *
+from type_infer import TypeAnalyzer, loop_trip_count, callee_key
+from collections import Counter
 
 class Walker():
     def __init__(self, debug=False):
@@ -16,11 +18,34 @@ class Walker():
         self.constraint_env = [ControlComp("main")]
         self.debug = debug
         self.target_file = None
+        # id(node) -> {'type','stable'} / {'type_stable'} from the pre-pass
+        self.types = {}
         self.trash = ['ImportDeclaration',
                       'ExportNamedDeclaration',
                       'ExportDefaultDeclaration',
                       'ExportAllDeclaration',
                       'DebuggerStatement']
+
+    def _ty(self, node):
+        """Inferred {'type','stable'} for a node, with safe defaults."""
+        return self.types.get(id(node), {})
+
+    def _label_repeated_calls(self, env):
+        """Whole-JOC pass: mark each func_call as repeated if its callee is
+        called more than once anywhere in the constraint tree."""
+        calls = []
+
+        def collect(region):
+            for e in region:
+                if isinstance(e, list):
+                    collect(e)
+                elif isinstance(e, DataComp) and e.comp_type == 'func_call':
+                    calls.append(e)
+
+        collect(env)
+        counts = Counter(c.callee for c in calls if c.callee is not None)
+        for c in calls:
+            c.repeated = (counts[c.callee] >= 2) if c.callee is not None else None
 
     def eval_node(self, node, env):
         node_type = node['type']
@@ -57,31 +82,41 @@ class Walker():
 #---------------------------------Data----------------------------------
     def eval_VariableDeclaration(self, node, env):
         for var in node['declarations']:
-            env.append(DataComp('var_dec'))
+            a = self._ty(var)
+            env.append(DataComp('var_dec', type=a.get('type', 'mixed'),
+                                stable=a.get('stable')))
         return
 
     def eval_AssignmentExpression(self, node, env):
-        env.append(DataComp('assign'))
+        a = self._ty(node)
+        env.append(DataComp('assign', type=a.get('type', 'mixed'),
+                            stable=a.get('stable')))
         return
 
     def eval_UnaryExpression(self, node, env):
-        env.append(DataComp('unary'))
+        a = self._ty(node)
+        env.append(DataComp('unary', type=a.get('type', 'mixed')))
         return
 
     def eval_CallExpression(self, node, env):
-        env.append(DataComp('func_call'))
+        a = self._ty(node)
+        env.append(DataComp('func_call', type=a.get('type', 'mixed'),
+                            callee=callee_key(node)))
         return
 
     def eval_ReturnStatement(self, node, env):
-        env.append(DataComp('return'))
+        a = self._ty(node)
+        env.append(DataComp('return', type=a.get('type', 'mixed')))
         return
 
     def eval_UpdateExpression(self, node, env):
-        env.append(DataComp('update'))
+        a = self._ty(node)
+        env.append(DataComp('update', type=a.get('type', 'mixed'),
+                            stable=a.get('stable')))
         return
 
     def eval_NewExpression(self, node, env):
-        env.append(DataComp('new'))
+        env.append(DataComp('new', type='object'))
         return
 
     def eval_ThrowStatement(self, node, env):
@@ -191,31 +226,36 @@ class Walker():
         return
 
     def eval_ForInStatement(self, node, env):
-        new_env = [ControlComp('for')]
+        new_env = [ControlComp('for', type_stable=self._ty(node).get('type_stable'),
+                               trip_count=loop_trip_count(node))]
         env.append(new_env)
         self.eval_node(node['body'], new_env)
         return
 
     def eval_ForOfStatement(self, node, env):
-        new_env = [ControlComp('for')]
+        new_env = [ControlComp('for', type_stable=self._ty(node).get('type_stable'),
+                               trip_count=loop_trip_count(node))]
         env.append(new_env)
         self.eval_node(node['body'], new_env)
         return
 
     def eval_ForStatement(self, node, env):
-        new_env = [ControlComp('for')]
+        new_env = [ControlComp('for', type_stable=self._ty(node).get('type_stable'),
+                               trip_count=loop_trip_count(node))]
         env.append(new_env)
         self.eval_node(node['body'], new_env)
         return
 
     def eval_WhileStatement(self, node, env):
-        new_env = [ControlComp('while')]
+        new_env = [ControlComp('while', type_stable=self._ty(node).get('type_stable'),
+                               trip_count=loop_trip_count(node))]
         env.append(new_env)
         self.eval_node(node['body'], new_env)
         return
 
     def eval_DoWhileStatement(self, node, env):
-        new_env = [ControlComp('do_while')]
+        new_env = [ControlComp('do_while', type_stable=self._ty(node).get('type_stable'),
+                               trip_count=loop_trip_count(node))]
         env.append(new_env)
         self.eval_node(node['body'], new_env)
         return
@@ -291,9 +331,17 @@ class Walker():
             print(target_file)
             print(json.dumps(stmts, indent=4))
 
+        # Pre-pass: infer value types and type stability over the same AST
+        # objects the walk below stamps onto comps (keyed by id(node)).
+        try:
+            self.types = TypeAnalyzer().run(stmts)
+        except Exception:
+            self.types = {}  # inference is best-effort; never block synthesis
+
         try:
             for node in stmts:
                 self.eval_node(node, self.constraint_env)
+            self._label_repeated_calls(self.constraint_env)
             return (True, self.constraint_env)
         except Exception as e:
             if self.debug:
