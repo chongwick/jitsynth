@@ -195,7 +195,21 @@ HOISTABLE_DESCRIPTIONS = {
     "Stmt_Interface (region)",
 }
 
+# Hoisted definitions that carry their own scope: $this/self/static/parent
+# inside their bodies are legal, so they are exempt from the class-scope filter
+# that rejects bare inline snippets. (Stmt_ClassMethod is intentionally excluded:
+# hoisted to global scope, a method body's $this would be invalid.)
+_SELF_SCOPING_DEFS = {
+    "Stmt_Class",
+    "Stmt_Trait",
+    "Stmt_Interface",
+    "Stmt_Function",
+}
+
 CORPUS_CACHE_FILE = 'corpus_cache.pkl'
+# Bump when the on-disk cache layout changes so stale caches are rejected.
+# v2: node_type_index entries carry a trailing value_type field.
+CACHE_VERSION = 2
 
 
 def _is_php_seed(filepath, filename):
@@ -222,7 +236,8 @@ def _index_one_file(filepath):
         entries = []
         for r in results:
             desc = r['description']
-            entry = (filepath, r['stmt_id'], r.get('start_file_pos'), r.get('end_file_pos'))
+            entry = (filepath, r['stmt_id'], r.get('start_file_pos'),
+                     r.get('end_file_pos'), r.get('value_type'))
             entries.append((desc, entry))
         return (filepath, source, results, entries)
     except Exception as e:
@@ -272,16 +287,29 @@ def build_corpus_index(seed_dir, parallel=1):
 def save_corpus_cache(node_type_index, file_cache, results_cache):
     """Pickle the corpus index to disk."""
     with open(CORPUS_CACHE_FILE, 'wb') as f:
-        pickle.dump((node_type_index, file_cache, results_cache), f)
+        pickle.dump((CACHE_VERSION, node_type_index, file_cache, results_cache), f)
     print(f"Cache saved to {CORPUS_CACHE_FILE}")
 
 
 def load_corpus_cache():
-    """Load a previously saved corpus index from disk. Returns None if not found."""
+    """Load a previously saved corpus index from disk.
+
+    Returns (node_type_index, file_cache, results_cache), or None if the cache
+    is missing or was written by an incompatible (older) layout version.
+    """
     if not os.path.isfile(CORPUS_CACHE_FILE):
         return None
     with open(CORPUS_CACHE_FILE, 'rb') as f:
-        return pickle.load(f)
+        payload = pickle.load(f)
+    # Versioned caches are a 4-tuple led by the version int; anything else
+    # (e.g. a legacy 3-tuple) predates value-type entries and must be rebuilt.
+    if not (isinstance(payload, tuple) and len(payload) == 4
+            and payload[0] == CACHE_VERSION):
+        print(f"Ignoring stale corpus cache at {CORPUS_CACHE_FILE} "
+              f"(version mismatch); rebuilding.")
+        return None
+    _version, node_type_index, file_cache, results_cache = payload
+    return node_type_index, file_cache, results_cache
 
 
 def get_corpus_index(seed_dir, rebuild=False, parallel=1):
@@ -371,7 +399,7 @@ def _try_create_join(prev_defs, curr_free_uses, curr_inline):
     return (join_assignment, modified_inline)
 
 
-_MAX_CONTEXT_RETRIES = 10
+_MAX_CONTEXT_RETRIES = 25
 
 _CLASS_SCOPE_RE = re.compile(
     r'\b(?:self|parent|static)\s*::'
@@ -425,6 +453,44 @@ _PHP_BUILTINS = {
 }
 
 
+# Contextual class keywords that always resolve inside the scope where they
+# legally appear; never treated as undefined user symbols.
+_CLASS_CONTEXT_KEYWORDS = {"self", "parent", "static"}
+
+_PHP_BUILTIN_SYMBOLS_CACHE = None
+
+
+def _php_builtin_symbols():
+    """Return a lowercased set of all PHP builtin function AND class/interface/
+    trait names available in the runtime interpreter.
+
+    Used to decide whether a structurally-referenced name (a function call,
+    `new X`, `X::y`, `extends X`) can actually resolve at runtime. Derived once
+    from the live `php` binary so it matches whatever extensions are loaded;
+    falls back to the small hand-maintained _PHP_BUILTINS set if `php` is
+    unavailable.
+    """
+    global _PHP_BUILTIN_SYMBOLS_CACHE
+    if _PHP_BUILTIN_SYMBOLS_CACHE is not None:
+        return _PHP_BUILTIN_SYMBOLS_CACHE
+    syms = set(n.lower() for n in _PHP_BUILTINS)
+    try:
+        out = subprocess.run(
+            ['php', '-r',
+             'echo json_encode(array_merge('
+             'get_defined_functions()["internal"],'
+             'get_declared_classes(),get_declared_interfaces(),'
+             'get_declared_traits()));'],
+            capture_output=True, text=True, timeout=30).stdout
+        for name in json.loads(out):
+            syms.add(name.lower())
+    except Exception as e:
+        print(f"Warning: could not load PHP builtin symbols ({e}); "
+              f"using minimal fallback set")
+    _PHP_BUILTIN_SYMBOLS_CACHE = syms
+    return syms
+
+
 def _has_class_scope_refs(text):
     """Check if text contains class-scope references (self/parent/static)."""
     return '$this' in text or _CLASS_SCOPE_RE.search(text) is not None
@@ -436,7 +502,8 @@ def _needs_function_scope(text):
 
 
 def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
-                     in_method=False, in_function=False, declared_names=None):
+                     in_method=False, in_function=False, declared_names=None,
+                     strict=True):
     """Pick a random PHP source snippet matching a DataComp, including dependencies.
 
     Returns (hoisted, inline, primary_defs, free_uses) where hoisted contains
@@ -454,12 +521,25 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
     if not candidates:
         return ([], f"/* no match for {data_comp.comp_type} */", set(), set())
 
+    # Type-directed selection (strict mode only): when the JOC pins a concrete
+    # value type, draw only from statements the corpus inferred to that type.
+    # Fall back to the full pool when the JOC is type-agnostic ("mixed"/None) or
+    # the typed bucket is empty, so precision never costs us coverage. In loose
+    # mode this filter is skipped, so any type-compatible statement may fill the
+    # slot (more variance, the original system's behavior). Entry layout:
+    # (filepath, stmt_id, start_pos, end_pos, value_type).
+    want_type = getattr(data_comp, 'type', None)
+    if strict and want_type not in (None, 'mixed'):
+        typed = [e for e in candidates if len(e) > 4 and e[4] == want_type]
+        if typed:
+            candidates = typed
+
     if declared_names is None:
         declared_names = set()
 
     for _attempt in range(_MAX_CONTEXT_RETRIES):
         entry = random.choice(candidates)
-        filepath, stmt_id, start_pos, end_pos = entry
+        filepath, stmt_id, start_pos, end_pos = entry[0], entry[1], entry[2], entry[3]
         if start_pos is None or end_pos is None:
             return ([], f"/* no position for {data_comp.comp_type} */", set(), set())
         source = file_cache.get(filepath)
@@ -480,14 +560,21 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
         closure = get_dependency_closure(results, stmt_id)
         hoisted_parts = []
         inline_parts = []
+        required_refs = set()    # user function/class names this candidate needs
+        provided_names = set()   # function/class names this candidate defines
         for sid in closure:
             text = get_source_slice(results, sid, source)
             if text is None:
                 continue
             r = results[sid]
+            required_refs |= set(r.get('structural_refs', set()))
             desc = r.get('description', '')
             if desc in HOISTABLE_DESCRIPTIONS:
-                hoisted_parts.append((text, r.get('node_type', '')))
+                node_type = r.get('node_type', '')
+                hoisted_parts.append((text, node_type))
+                nm = _extract_def_name(text, node_type)
+                if nm:
+                    provided_names.add(nm.lower())
             elif desc in CATCH_DESCRIPTIONS:
                 # Replace bare catch blocks with stub variable assignments
                 # to avoid "unexpected token catch" errors
@@ -496,11 +583,35 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
                     inline_parts.append(f'{var} = new Exception("stub");')
             else:
                 inline_parts.append(text)
-        # Filter hoisted parts: remove class-scope refs when outside a class
+                nm = _DEF_NAME_RE.search(text)
+                if nm:
+                    provided_names.add(nm.group(1).lower())
+
+        # Resolvability filter: reject candidates whose closure references a
+        # user function/class that is neither defined within the closure, already
+        # emitted by an earlier slot, nor a PHP builtin. Unresolvable references
+        # are the dominant runtime failure ("Call to undefined function" /
+        # "Class not found"), almost always because the symbol lived in another
+        # seed and never came along with the extracted statement.
+        resolved = (provided_names | declared_names | _php_builtin_symbols()
+                    | _CLASS_CONTEXT_KEYWORDS)
+        unresolved = False
+        for ref in required_refs:
+            rl = ref.lstrip('\\').lower()
+            if rl not in resolved and rl.split('\\')[-1] not in resolved:
+                unresolved = True
+                break
+        if unresolved:
+            continue
+        # Filter hoisted parts: remove class-scope refs when outside a class.
+        # Exception: class/trait/interface/function DEFINITIONS establish their
+        # own scope, so $this/self/static/parent inside their bodies are valid.
+        # Dropping them here is what left references like `new Foo()` with an
+        # undefined Foo -- the dominant "Uncaught Error: Class not found" cause.
         if not in_method:
             hoisted_parts = [
                 (t, n) for t, n in hoisted_parts
-                if not _has_class_scope_refs(t)
+                if n in _SELF_SCOPING_DEFS or not _has_class_scope_refs(t)
             ]
         # Check hoisted parts for name collisions
         filtered_hoisted = []
@@ -552,19 +663,15 @@ def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
         free_uses = primary.get('uses', set()) - closure_defs
         return (hoisted_parts, inline, primary_defs, free_uses)
 
-    # Exhausted retries — return last result anyway
-    primary = results[stmt_id]
-    primary_defs = primary.get('defs', set())
-    closure_defs = set()
-    for sid in closure:
-        closure_defs.update(results[sid].get('defs', set()))
-    free_uses = primary.get('uses', set()) - closure_defs
-    return (hoisted_parts, inline, primary_defs, free_uses)
+    # Exhausted retries without finding a context-compatible, fully-resolvable
+    # candidate. Emit a benign placeholder rather than leaking a snippet with
+    # undefined symbols or out-of-scope references.
+    return ([], f"/* no resolvable {data_comp.comp_type} */", set(), set())
 
 
 def synthesize_region(region_list, node_type_index, file_cache, results_cache,
                       indent=0, in_method=False, in_function=False,
-                      join_rate=0.0, declared_names=None):
+                      join_rate=0.0, declared_names=None, strict=True):
     """Synthesize PHP source for a nested control region.
 
     Returns (hoisted_lines, region_lines) where hoisted_lines contains
@@ -583,6 +690,17 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache,
     hoisted = []
     lines = []
 
+    # Loop counter machinery for honoring ControlComp.trip_count on while/do_while:
+    # when the JOC pins an iteration count, emit a real bounded counter instead of
+    # the infinite-loop-guard fallback. loop_counter/loop_bound stay None otherwise.
+    # In loose mode trip counts are ignored, reverting to fixed default bounds
+    # (the original system's behavior).
+    trip_count = getattr(ctrl, 'trip_count', None) if strict else None
+    if not (isinstance(trip_count, int) and trip_count > 0):
+        trip_count = None
+    loop_counter = None
+    loop_bound = trip_count
+
     # Generate synthetic control wrapper
     if ct == "if":
         lines.append(f"{pad}if (true) {{")
@@ -590,10 +708,20 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache,
         lines.append(f"{pad}if (!true) {{")  # else branch as negated if
     elif ct == "for":
         vname = _next_name("i")
-        lines.append(f"{pad}for (${vname} = 0; ${vname} < 10; ${vname}++) {{")
+        # Honor the inferred trip count as the loop bound (defaults to 10).
+        bound = trip_count if trip_count is not None else 10
+        lines.append(f"{pad}for (${vname} = 0; ${vname} < {bound}; ${vname}++) {{")
     elif ct == "while":
-        lines.append(f"{pad}while (true) {{")
+        if trip_count is not None:
+            loop_counter = _next_name("w")
+            lines.append(f"{pad}${loop_counter} = 0;")
+            lines.append(f"{pad}while (${loop_counter} < {loop_bound}) {{")
+        else:
+            lines.append(f"{pad}while (true) {{")
     elif ct == "do_while":
+        if trip_count is not None:
+            loop_counter = _next_name("d")
+            lines.append(f"{pad}${loop_counter} = 0;")
         lines.append(f"{pad}do {{")
     elif ct == "func":
         fname = _next_name("f")
@@ -618,7 +746,7 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache,
     # Phase 1: collect body elements with metadata
     body_pad = "    " * (indent + 1)
     elements = []  # (kind, hoisted_parts, content, defs, free_uses)
-    if ct == "while":
+    if ct == "while" and loop_counter is None:
         lines.append(f"{body_pad}break;  // avoid infinite loop")
     for element in region_list[1:]:
         if isinstance(element, list):
@@ -626,13 +754,13 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache,
                 element, node_type_index, file_cache, results_cache,
                 indent + 1, in_method=child_in_method,
                 in_function=child_in_function, join_rate=join_rate,
-                declared_names=declared_names)
+                declared_names=declared_names, strict=strict)
             elements.append(('region', sub_hoisted, sub_lines, None, None))
         elif isinstance(element, DataComp):
             hoisted_parts, inline_code, defs, free_uses = pick_data_source(
                 element, node_type_index, file_cache, results_cache,
                 in_method=child_in_method, in_function=child_in_function,
-                declared_names=declared_names)
+                declared_names=declared_names, strict=strict)
             elements.append(('data', hoisted_parts, inline_code, defs, free_uses))
         elif isinstance(element, ControlComp):
             elements.append(('bare', [], f"/* bare control: {element.comp_type} */", None, None))
@@ -655,9 +783,17 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache,
         elif kind == 'bare':
             lines.append(f"{body_pad}{content}")
 
+    # Advance the loop counter inside the body so counted while/do_while loops
+    # make progress toward their trip count.
+    if loop_counter is not None:
+        lines.append(f"{body_pad}${loop_counter}++;")
+
     # Close wrapper
     if ct == "do_while":
-        lines.append(f"{pad}}} while (false);")
+        if loop_counter is not None:
+            lines.append(f"{pad}}} while (${loop_counter} < {loop_bound});")
+        else:
+            lines.append(f"{pad}}} while (false);")
     elif ct == "try":
         lines.append(f"{pad}}} catch (Exception $e) {{}}")
     else:
@@ -666,8 +802,15 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache,
     return hoisted, lines
 
 
-def synthesize(constraint_env, node_type_index, file_cache, results_cache, join_rate=0.0):
-    """Walk a JOC constraint tree and assemble a PHP script."""
+def synthesize(constraint_env, node_type_index, file_cache, results_cache,
+               join_rate=0.0, strict=True):
+    """Walk a JOC constraint tree and assemble a PHP script.
+
+    strict=True (default) enforces the JOC's inferred annotations: data slots are
+    filled with statements of the matching value type, and loops honor their trip
+    count. strict=False runs the original type-blind system (random type-compatible
+    statements, fixed default loop bounds) for more output variance.
+    """
     global _name_counter
     _name_counter = 0
 
@@ -682,12 +825,13 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache, join_
         if isinstance(element, list):
             sub_hoisted, sub_lines = synthesize_region(
                 element, node_type_index, file_cache, results_cache,
-                indent=0, join_rate=join_rate, declared_names=declared_names)
+                indent=0, join_rate=join_rate, declared_names=declared_names,
+                strict=strict)
             elements.append(('region', sub_hoisted, sub_lines, None, None))
         elif isinstance(element, DataComp):
             hoisted_parts, inline_code, defs, free_uses = pick_data_source(
                 element, node_type_index, file_cache, results_cache,
-                declared_names=declared_names)
+                declared_names=declared_names, strict=strict)
             elements.append(('data', hoisted_parts, inline_code, defs, free_uses))
         elif isinstance(element, ControlComp):
             elements.append(('bare', [], f"/* bare control: {element.comp_type} */", None, None))
@@ -712,8 +856,14 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache, join_
             body.append(content)
 
     # Deduplicate hoisted definitions by name to avoid "Cannot redeclare" errors
-    # PHP function/class names are case-insensitive
+    # (PHP function/class names are case-insensitive). Use a LOCAL seen-set here:
+    # declared_names was already populated by pick_data_source as it selected
+    # each statement, so consulting it would skip every hoisted def as a
+    # redeclaration of itself -- dropping the very class/function definitions that
+    # the emitted references depend on. Seed only with builtins so we still avoid
+    # redeclaring those.
     unique_hoisted = []
+    seen_defs = set(n.lower() for n in _PHP_BUILTINS)
     for text, node_type in hoisted:
         # Strip class-only modifiers from methods hoisted outside a class
         if node_type == 'Stmt_ClassMethod':
@@ -721,15 +871,15 @@ def synthesize(constraint_env, node_type_index, file_cache, results_cache, join_
         name = _extract_def_name(text, node_type)
         if name:
             key = name.lower()
-            if key in declared_names:
+            if key in seen_defs:
                 continue
-            declared_names.add(key)
+            seen_defs.add(key)
         unique_hoisted.append(text)
     lines = ["<?php"] + unique_hoisted + body
     return "\n".join(lines) + "\n"
 
 
-def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1, join_rate=0.0):
+def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1, join_rate=0.0, strict=True):
     """Run an infinite fuzzing loop: synthesize, write, sanitize, repeat."""
     # Load all constraints
     pickle_files = sorted([
@@ -761,7 +911,7 @@ def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=
                 _clean()
             iteration += 1
             pf, constraint = random.choice(constraints)
-            php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=join_rate)
+            php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=join_rate, strict=strict)
             base_name = os.path.splitext(os.path.basename(pf))[0]
             out_name = f"fuzz_{base_name}_{token_hex(5)}.php"
             out_path = os.path.join(out_dir, out_name)
@@ -807,6 +957,12 @@ def main():
     parser.add_argument('--join-rate', type=float, default=0.0,
                         help='Probability (0.0-1.0) of creating join variables between '
                              'consecutive data statements (default: 0.0)')
+    parser.add_argument('--loose', action='store_true',
+                        help='Run the original type-blind synthesizer: ignore JOC '
+                             'value-type and trip-count annotations (random '
+                             'type-compatible statements, fixed default loop bounds) '
+                             'for more output variance. Default is strict, which '
+                             'enforces those annotations.')
     parser.add_argument('-j', '--jobs', type=int, default=1,
                         help='Number of parallel worker processes (default: 1)')
     args = parser.parse_args()
@@ -815,10 +971,12 @@ def main():
         get_corpus_index(args.seeds, rebuild=True, parallel=args.jobs)
         return
 
-    elif args.fuzz:
+    strict = not args.loose
+
+    if args.fuzz:
         fuzz_loop(args.fuzz, args.seeds, args.out,
                   rebuild_cache=args.rebuild_cache, parallel=args.jobs,
-                  join_rate=args.join_rate)
+                  join_rate=args.join_rate, strict=strict)
 
     elif args.synth:
         # Collect constraint pickle files
@@ -839,7 +997,7 @@ def main():
             constraint = load_constraint(pf)
             base_name = os.path.splitext(os.path.basename(pf))[0]+token_hex(5)
             for i in range(args.count):
-                php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=args.join_rate)
+                php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=args.join_rate, strict=strict)
                 if args.count == 1:
                     out_name = f"{base_name}.php"
                 else:

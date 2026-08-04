@@ -338,6 +338,176 @@ def _get_expr_uses(expr):
 
 
 # ---------------------------------------------------------------------------
+# 3a. Value-type inference — the produced type of a statement's value
+# ---------------------------------------------------------------------------
+#
+# Mirrors the JS type lattice used for JOC data tags so that a JOC's inferred
+# type can be matched against real PHP statements during synthesis. PHP is
+# dynamically typed, so this is a conservative best-effort: anything the
+# analyzer can't establish degrades to "mixed".
+
+_PHP_NUMERIC = {"int", "float"}
+
+_PHP_CAST_TYPES = {
+    "Expr_Cast_Int": "int",
+    "Expr_Cast_Double": "float",
+    "Expr_Cast_String": "string",
+    "Expr_Cast_Bool": "bool",
+    "Expr_Cast_Array": "array",
+    "Expr_Cast_Object": "object",
+}
+
+# Small, high-confidence table of builtin return types (name -> lattice type).
+_PHP_BUILTIN_RETURNS = {
+    # int
+    "strlen": "int", "count": "int", "sizeof": "int", "intval": "int",
+    "mt_rand": "int", "rand": "int", "time": "int", "ord": "int",
+    "crc32": "int", "strcmp": "int", "strncmp": "int",
+    # float
+    "floatval": "float", "sqrt": "float", "sin": "float", "cos": "float",
+    "pi": "float", "pow": "float", "fmod": "float", "log": "float",
+    # string
+    "strval": "string", "sprintf": "string", "vsprintf": "string",
+    "implode": "string", "join": "string", "str_repeat": "string",
+    "trim": "string", "ltrim": "string", "rtrim": "string",
+    "strtolower": "string", "strtoupper": "string", "ucfirst": "string",
+    "substr": "string", "str_replace": "string", "number_format": "string",
+    "date": "string", "md5": "string", "sha1": "string", "hash": "string",
+    "json_encode": "string", "base64_encode": "string", "chr": "string",
+    "htmlspecialchars": "string", "strrev": "string",
+    # bool
+    "is_array": "bool", "is_string": "bool", "is_int": "bool",
+    "is_float": "bool", "is_bool": "bool", "is_null": "bool",
+    "is_numeric": "bool", "is_object": "bool", "is_callable": "bool",
+    "isset": "bool", "empty": "bool", "in_array": "bool",
+    "array_key_exists": "bool", "boolval": "bool", "ctype_digit": "bool",
+    "str_contains": "bool", "str_starts_with": "bool", "str_ends_with": "bool",
+    "function_exists": "bool", "class_exists": "bool", "method_exists": "bool",
+    # array
+    "explode": "array", "array_map": "array", "array_filter": "array",
+    "array_merge": "array", "array_keys": "array", "array_values": "array",
+    "range": "array", "str_split": "array", "compact": "array",
+    "array_slice": "array", "array_reverse": "array", "array_fill": "array",
+    "preg_split": "array", "array_unique": "array", "array_diff": "array",
+}
+
+
+def _php_name(node):
+    """Lowercased simple name from a Name/Identifier node, else None."""
+    if not isinstance(node, dict):
+        return None
+    name = node.get("name")
+    if isinstance(name, str):
+        return name.lower()
+    parts = node.get("parts")
+    if isinstance(parts, list) and parts:
+        return parts[-1].lower()
+    return None
+
+
+def _php_join(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if a == b else "mixed"
+
+
+def _php_binop_type(op, lt, rt):
+    """Result type of a PHP binary/assign-op given operand types."""
+    if op in ("Plus", "Minus", "Mul"):
+        if op == "Plus" and lt == "array" and rt == "array":
+            return "array"
+        return "int" if lt == "int" and rt == "int" else "float"
+    if op in ("Div", "Pow"):
+        return "float"
+    if op == "Mod":
+        return "int"
+    if op == "Concat":
+        return "string"
+    if op in ("ShiftLeft", "ShiftRight", "BitwiseAnd", "BitwiseOr", "BitwiseXor"):
+        return "int"
+    if op == "Spaceship":
+        return "int"
+    if op == "Coalesce":
+        return _php_join(lt, rt)
+    if op in ("Equal", "NotEqual", "Identical", "NotIdentical",
+              "Smaller", "SmallerOrEqual", "Greater", "GreaterOrEqual",
+              "BooleanAnd", "BooleanOr", "LogicalAnd", "LogicalOr",
+              "LogicalXor"):
+        return "bool"
+    return "mixed"
+
+
+def infer_value_type(node):
+    """Infer the lattice type of the value an expression node produces."""
+    if not isinstance(node, dict):
+        return "mixed"
+    nt = node.get("nodeType", "")
+
+    if nt == "Scalar_Int":
+        return "int"
+    if nt == "Scalar_Float":
+        return "float"
+    if nt in ("Scalar_String", "Scalar_Encapsed", "Scalar_InterpolatedString"):
+        return "string"
+    if nt.startswith("Scalar_MagicConst"):
+        return "int" if nt == "Scalar_MagicConst_Line" else "string"
+    if nt == "Expr_ConstFetch":
+        name = _php_name(node.get("name"))
+        if name in ("true", "false"):
+            return "bool"
+        if name == "null":
+            return "null"
+        return "mixed"
+    if nt == "Expr_Array":
+        return "array"
+    if nt == "Expr_New":
+        return "object"
+    if nt in ("Expr_Closure", "Expr_ArrowFunction"):
+        return "object"
+    if nt in ("Expr_Assign", "Expr_AssignRef"):
+        return infer_value_type(node.get("expr"))
+    if nt.startswith("Expr_AssignOp_"):
+        return _php_binop_type(nt[len("Expr_AssignOp_"):],
+                               "mixed", infer_value_type(node.get("expr")))
+    if nt.startswith("Expr_BinaryOp_"):
+        return _php_binop_type(nt[len("Expr_BinaryOp_"):],
+                               infer_value_type(node.get("left")),
+                               infer_value_type(node.get("right")))
+    if nt in ("Expr_UnaryMinus", "Expr_UnaryPlus"):
+        t = infer_value_type(node.get("expr"))
+        return t if t in _PHP_NUMERIC else "float"
+    if nt == "Expr_BooleanNot":
+        return "bool"
+    if nt == "Expr_BitwiseNot":
+        return "int"
+    if nt in ("Expr_PreInc", "Expr_PostInc", "Expr_PreDec", "Expr_PostDec"):
+        return "int"
+    if nt in _PHP_CAST_TYPES:
+        return _PHP_CAST_TYPES[nt]
+    if nt == "Expr_Ternary":
+        then = node.get("if")
+        then_t = infer_value_type(then) if then else infer_value_type(node.get("cond"))
+        return _php_join(then_t, infer_value_type(node.get("else")))
+    if nt == "Expr_FuncCall":
+        return _PHP_BUILTIN_RETURNS.get(_php_name(node.get("name")), "mixed")
+    return "mixed"
+
+
+def get_statement_value_type(stmt):
+    """Produced value type of a statement, for JOC data-tag matching."""
+    nt = stmt.get("nodeType")
+    if nt == "Stmt_Expression":
+        expr = stmt.get("expr")
+        return infer_value_type(expr) if expr else "mixed"
+    if nt == "Stmt_Return":
+        expr = stmt.get("expr")
+        return infer_value_type(expr) if expr else "null"
+    return "mixed"
+
+
+# ---------------------------------------------------------------------------
 # 3b. AST flattener — linearize nested control-flow statements
 # ---------------------------------------------------------------------------
 
@@ -617,7 +787,9 @@ def collect_structural_refs(stmt):
             if name:
                 refs.add(name)
 
-        elif nt == "Expr_StaticCall":
+        elif nt in ("Expr_StaticCall", "Expr_StaticPropertyFetch",
+                    "Expr_ClassConstFetch", "Expr_Instanceof"):
+            # Foo::bar(), Foo::$p, Foo::CONST, Foo::class, $x instanceof Foo
             name = _extract_name(node.get("class"))
             if name:
                 refs.add(name)
@@ -625,6 +797,12 @@ def collect_structural_refs(stmt):
         elif nt == "Stmt_TraitUse":
             for trait in node.get("traits", []):
                 name = _extract_name(trait)
+                if name:
+                    refs.add(name)
+
+        elif nt == "Stmt_Catch":
+            for ctype in node.get("types", []):
+                name = _extract_name(ctype)
                 if name:
                     refs.add(name)
 
@@ -695,6 +873,7 @@ def build_statement_dependencies(ast):
 
         defs = collect_defs(stmt)
         uses = get_statement_uses(stmt)
+        value_type = get_statement_value_type(stmt)
 
         # Build dependencies: for each used variable, find where it was last defined
         depends_on = set()
@@ -728,6 +907,7 @@ def build_statement_dependencies(ast):
             "end_file_pos": end_file_pos,
             "defs": defs,
             "uses": uses,
+            "value_type": value_type,
             "structural_refs": structural_refs,
             "depends_on": depends_on,
             "region": region,

@@ -1,0 +1,14 @@
+<?php
+function validate($value)
+{
+    foreach ([0] as $_) {
+        $a = &$value->a;
+        $value->a ?? null;
+    }
+}
+
+validate((object) []);
+validate((object) []);
+validate((object) ['b' => 0]);
+?>
+DONE

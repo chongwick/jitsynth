@@ -9,11 +9,11 @@ jitsynth connects two sides:
 - **JOC constraints** — nested trees of `ControlComp` and `DataComp` nodes describing the structural shape of JIT-exercising programs (e.g. "a function containing a for loop with an update, followed by three function calls")
 - **PHP seed corpus** — ~509 real PHP scripts, analyzed at the statement level with dependency tracking
 
-Beyond raw structure, JOCs also capture JIT-relevant metadata inferred from the JS seed (see `jc/type_infer.py`): each data op's **value type** and whether a variable write keeps it **type-stable** or transitions it (a deopt trigger); each loop's **trip count** and whether it is **type-stable across the back-edge**; and each function call's **callee identity** plus whether that function is **called repeatedly** (so it goes hot). See CLAUDE.md for the full field reference. These annotations are captured today but not yet used by the synthesizer.
+Beyond raw structure, JOCs also capture JIT-relevant metadata inferred from the JS seed (see `jc/type_infer.py`): each data op's **value type** and whether a variable write keeps it **type-stable** or transitions it (a deopt trigger); each loop's **trip count** and whether it is **type-stable across the back-edge**; and each function call's **callee identity** plus whether that function is **called repeatedly** (so it goes hot). See CLAUDE.md for the full field reference. By default (*strict* mode) the synthesizer honors two of these: each data op's **value type** drives type-directed slot filling (statements are matched to the JOC's inferred type), and each loop's **trip count** sets the synthesized loop bound. Passing `--loose` disables this and runs the original type-blind system (random type-compatible statements, fixed default loop bounds) for more output variance. The remaining annotations are captured but not yet consumed.
 
 The synthesizer walks a constraint tree top-down and greedily fills each slot:
-- **Control regions** (if, for, while, function, class, try, ...) get synthetic PHP wrappers
-- **Data operations** (assign, func_call, update, return, ...) get randomly selected real PHP statements from the seed corpus, along with all their variable-defining dependencies
+- **Control regions** (if, for, while, function, class, try, ...) get synthetic PHP wrappers; loops honor the JOC's inferred trip count as their bound
+- **Data operations** (assign, func_call, update, return, ...) get real PHP statements from the seed corpus — matched to the JOC's inferred value type when one is pinned — along with all their variable-defining dependencies
 
 ## Prerequisites
 
@@ -53,6 +53,7 @@ python3 driver.py --synth <PATH> [--seeds DIR] [--count N] [--out DIR] [--rebuil
 | `--count N` | `1` | Number of scripts to generate per constraint |
 | `--out DIR` | `./synth_out` | Output directory for generated `.php` files |
 | `--rebuild-cache` | | Force rebuild of the corpus cache during `--synth`/`--fuzz` |
+| `--loose` | | Ignore JOC value-type and trip-count annotations (original type-blind system, more variance). Default is strict. |
 | `-j N` | `1` | Number of parallel worker processes |
 
 Other modes:

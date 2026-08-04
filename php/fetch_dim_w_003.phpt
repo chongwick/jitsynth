@@ -1,0 +1,7 @@
+<?php
+set_error_handler(function() {
+    $GLOBALS['a']='';
+});
+$a[3E44]='';
+?>
+DONE
