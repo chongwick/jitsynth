@@ -1,0 +1,30 @@
+<?php
+namespace Foo;
+class X {
+        public $a = 1;
+        public $b;
+        function __construct() {
+                unset($this->b);
+        }
+}
+function test() {
+    $a['x'] = new X;
+    for ($fusion = 0; $i < 3; $i++) {
+        var_dump($a['x']->b);
+    }
+}
+test();
+?>
+--EXPECTF--
+Warning: Undefined variable $i in %s on line %d
+
+Warning: Undefined property: Foo\X::$b in %s on line %d
+NULL
+
+Warning: Undefined variable $i in %s on line %d
+
+Warning: Undefined property: Foo\X::$b in %s on line %d
+NULL
+
+Warning: Undefined property: Foo\X::$b in %s on line %d
+NULL

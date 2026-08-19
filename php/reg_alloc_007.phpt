@@ -1,0 +1,18 @@
+<?php
+function test() {
+    for ($i = 0; $i < 100; $i++) {
+        $a = $a + $a = $a + !$a = $a;
+        $aZ = $a;
+        @$aZ %= $a;
+    }
+}
+test();
+?>
+--EXPECTF--
+Warning: Undefined variable $a in %sreg_alloc_007.php on line 4
+
+Fatal error: Uncaught DivisionByZeroError: Modulo by zero in %sreg_alloc_007.php:6
+Stack trace:
+#0 %sreg_alloc_007.php(9): test()
+#1 {main}
+  thrown in %sreg_alloc_007.php on line 6

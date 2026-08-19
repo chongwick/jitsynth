@@ -1,0 +1,95 @@
+\subsection{Dependency-Aware Indexing}
+\label{sec:corpus}
+
+To fill \joc{} \texttt{ControlTags} and \texttt{DataTags} with real PHP source fragments, \system{} uses a corpus of PHP seed programs. Programs are analyzed and parsed into independent statements and labeled by their corresponding \joc{} type. This section describes how the corpus is analyzed and indexed.
+
+\vspace{0.3em}
+\boldline{Seed Corpus.}
+Regression test suites are widely used as initial input corpuses \cite{graphbasedir,jiang2024fuzzing}. The PHP development team maintains a test suite of over 20k scripts to ensure interpreter functionality. Each seed is a standalone PHP program containing a variety of operations (assignments, function calls, class definitions, control flow, etc.) representative of real-world PHP usage patterns.
+
+\vspace{0.3em}
+\boldline{Def-Use Analysis.}
+Each seed file is parsed into an AST using the \texttt{nikic/php-parser} library~\cite{nikic_php-ast}. The AST is then flattened. Statements nested inside control-flow constructs (e.g, \texttt{if}, \texttt{for}) and scope boundaries (e.g., \texttt{function}, \texttt{class}) are turned into a linear sequence. Each control-flow or scope construct is replaced by a \textit{region header}, a synthetic node carrying only the construct's header expressions (conditions, loop variables), followed by the recursively flattened body statements. This linearization enables a single-pass dependency analysis while preserving the nesting context of each statement via metadata.
+
+For each flattened statement, \system{} computes two sets:
+\begin{itemize}[leftmargin=1em, itemsep=1pt, topsep=2pt]
+    \item \textbf{Defs}: Variables written by the statement. This includes assignment targets (\texttt{\$a = ...}), destructuring assignments (\texttt{list(\$a, \$b) = ...}), loop variables (\texttt{foreach} value/key), increment/decrement targets, and function/method parameters.
+    \item \textbf{Uses}: Variables read by the statement, excluding the left-hand side of simple assignments. For compound assignments (\texttt{\$a += \$b}), the left-hand side is included as both a def and a use. For property access on the left-hand side (\texttt{\$obj->prop = 1}), the base object is recorded as a use.
+\end{itemize}
+
+\vspace{0.3em}
+\boldline{Dependency Graph Construction.}
+\system{} builds a statement-level dependency graph in a single pass over the flattened statement sequence. The algorithm maintains a last-definition map $L : Variable \to Stmt\_ID$ that records, for each variable, the most recent statement that defined it. For each statement $s_i$ with uses $U_i$:
+\[
+dependency(s_i) = \{ L[v] \mid v \in U_i \land v \in \text{dom}(L) \}
+\]
+After computing dependencies, $L$ is updated with $s_i$'s definitions. In addition to data-flow dependencies, the system computes \textit{structural dependencies}: if $s_i$ references a function, class, trait, or interface by name, it depends on the statement that defines that entity.
+
+\vspace{0.3em}
+\boldline{Transitive Closure and Dependency Slices.}
+Given a target statement $s_t$, the \textit{dependency closure} is the set of all statements transitively reachable through the dependency relation:
+\[
+closure(s_t) = \{s_t\} \cup \bigcup_{s_j \in \text{depends\_on}(s_t)} \text{closure}(s_j)
+\]
+The \textit{dependency slice} for $s_t$ is the concatenation of source text for all statements in the closure, ordered by statement index. This slice is self-contained; it includes all variable definitions and structural declarations needed to execute $s_t$ without undefined-variable or undefined-function errors.
+
+\vspace{0.3em}
+\boldline{Type-Indexed Corpus.}
+Each statement in the flattened corpus is classified along two axes. The first is its AST node type, which determines the \joc{} \texttt{DataTag} it can satisfy (via the mapping in \autoref{tab:comp_map}). The second is its inferred \textit{value type}, drawn from the same lattice used to annotate \joc{}s (\texttt{int}, \texttt{float}, \texttt{string}, \texttt{bool}, \texttt{array}, \texttt{object}, etc.). \system{} infers this type with a conservative bottom-up pass over the statement's AST: literals, casts, and \texttt{new} expressions yield their obvious type; arithmetic, concatenation, and comparison operators propagate types through their operands; and a table of common built-in functions supplies return types (e.g., \texttt{strlen} $\to$ \texttt{int}, \texttt{implode} $\to$ \texttt{string}, \texttt{explode} $\to$ \texttt{array}). Any statement whose type cannot be determined statically degrades to \texttt{mixed}. The corpus index maps each node type to a list of \textit{entries}; each entry records the statement's self-contained dependency slice together with its inferred value type, so that a data slot demanding a concrete type can be filled from a type-compatible statement.
+
+\subsection{Constraint-Guided Program Generation}
+\label{sec:synthesis}
+
+Given a \joc{} and the indexed corpus, \system{} generates a PHP program by walking the constraint top-down and filling each component with concrete PHP source. Algorithm \ref{alg:synthesis} presents the synthesis algorithm.
+
+\input{alg}
+
+\vspace{0.3em}
+\boldline{Control Region Generation.}
+To satisfy the control-flow requirements of a \joc, \system{} emits a control-flow construct from the seed corpus for each \texttt{ControlTag}. To ensure that loops reach the required hotness thresholds, \system{} matches each loop's iteration count to the \textit{trip count} recorded on its \texttt{ControlTag}. For counted \texttt{for} loops, the trip count becomes the loop bound; a \texttt{ControlTag} with a trip count of 100 emits \texttt{for (\$i\_0 = 0; \$i\_0 < 100; \$i\_0++)}. For \texttt{while} and \texttt{do-while} loops, \system{} emits an explicit bounded counter that runs the recorded number of iterations rather than a guarded infinite loop. This ensures that loops the \joc{} identifies as hot execute enough iterations to cross the JIT's compilation threshold.
+A global counter generates unique names (\texttt{f\_0}, \texttt{f\_1}, \texttt{C\_0}, \texttt{i\_0}, etc.) to avoid collisions across regions.
+
+\autoref{phpfromjoc} exemplifies control region generation based off the \joc{} in \autoref{lst:joc_ex} with each line color-coded to its corresponding \joc{} line. Line 2 fills the \texttt{ControlTag} for the function definition while Line 5 nests a for loop inside the function definition as defined by the \joc{}. This matching ensures that the final PHP output faithfully reflects the control-flow behavior of the constraints.
+
+\vspace{0.3em}
+\boldline{Data Slot Filling.}
+Similar to control region generation, each \texttt{DataTag} is filled by querying the corpus index for statements matching the tag's node type (via the mapping in \autoref{tab:comp_map}). When the \texttt{DataTag} additionally pins a concrete value type, \system{} restricts the candidate pool to entries whose inferred value type matches, so that the synthesized statement exercises the same type the \joc{} observed in the seed. If the \joc{} is type-agnostic (\texttt{mixed}) or no type-compatible candidate exists, \system{} falls back to the full pool. A candidate statement is then selected uniformly at random from the eligible matches.
+
+Both this type-directed filling and the earlier trip-count matching are optional. \system{} exposes a \textit{strict} mode, which enforces the \joc{}'s value-type and trip-count annotations as described above, and a \textit{loose} mode, which ignores them, selecting any type-compatible statement and emitting fixed default loop bounds. Loose mode recovers the behavior of a purely structural synthesizer and yields greater output variance, while strict mode more faithfully reproduces the JIT-relevant behavior the \joc{} captured. The system retrieves the statement's dependency closure from the pre-computed cache and constructs the \textit{dependency slice}.
+
+The dependency slice is partitioned into two categories:
+\begin{itemize}[leftmargin=1em, itemsep=1pt, topsep=2pt]
+    \item \textbf{Hoistable definitions}: Function, class, trait, and interface declarations that must appear at the top level of the PHP script (outside control structures) to be valid.
+    \item \textbf{Inline statements}: All other statements, which are placed directly at the data slot's position in the synthesized output.
+\end{itemize}
+
+
+In \autoref{phpfromjoc}, \system{} fills each \texttt{DataTag} with a data dependency slice from the seed corpus. Notably, multiple statements correspond to one tag. For example, Line 3 of the \joc{} (\autoref{lst:joc_ex}) calls for a variable declaration and corresponds to Lines 3 and 4 in the emitted PHP source code. Line 4 of \autoref{phpfromjoc} ($\$counter = count(\$items);$) fills the variable declaration constraint, but the dependency slice includes Line 3 ($\$items = [1, 2, 3, 4];$. This illustrates the utility of dependency slices. By using both lines to satisfy the constraint, no semantic error is introduced.
+
+\vspace{0.3em}
+\boldline{Variable Join Points.}
+\system{} introduces \textit{variable join points} between adjacent data slots to create cross-slot data-flow connections. Given the defs of a preceding slot and the free uses (variables used but not defined within the dependency closure) of the current slot, \system{} creates a join variable that bridges the two.
+This mechanism increases the data-flow complexity of synthesized programs.
+
+\begin{figure}
+\begin{lstlisting}[language=PHP, frame=tb, escapechar=!, framexleftmargin=1.8em, caption={PHP seed produced from JOC}, label=phpfromjoc]
+<?php
+!\highlighttoend{lightorange}!function f_0() {
+!\highlighttoend{lightgreen}!    $items = [1, 2, 3, 4];
+!\highlighttoend{lightgreen}!    $counter = count($items);
+!\highlighttoend{lightblue}!    for ($i_0 = 0; $i_0 < 100; $i_0++) {
+!\highlighttoend{lightyellow}!        $path = __DIR__ . "/data.txt";
+!\highlighttoend{lightyellow}!        $raw = file_get_contents($path);
+!\highlighttoend{lightyellow}!        $name = trim($raw);
+!\highlighttoend{lightyellow}!        $output[] = strtolower($name);
+!\highlighttoend{lightyellow}!    }
+!\highlighttoend{lightpink}!    $payload = ["ok" => true];
+!\highlighttoend{lightpink}!    $result = json_encode($payload);
+!\highlighttoend{lightpink}!    return $result;
+!\highlighttoend{lightpink}!}
+!\highlighttoend{lightpurple}!$haystack = "abc123";
+!\highlighttoend{lightpurple}!var_dump(preg_match('/\d+/', $haystack));
+!\highlighttoend{lightcyan}!$buf = "hello";
+!\highlighttoend{lightcyan}!printf("%d\n", strlen($buf));
+\end{lstlisting}
+\end{figure}

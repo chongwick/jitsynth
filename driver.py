@@ -1,4 +1,4 @@
-from php_dependency_analyzer import build_statement_dependencies, get_dependency_slice
+from php_dependency_analyzer import build_statement_dependencies, get_dependency_slice, get_dependency_closure, get_source_slice
 from jc.comps import ControlComp, DataComp
 import sys
 import subprocess
@@ -7,6 +7,7 @@ import pickle
 import os
 import argparse
 import random
+import re
 import math
 from secrets import token_hex
 from multiprocessing import Pool
@@ -20,7 +21,7 @@ class _CompsUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 def _clean():
-    os.system(f"git clean -fd -e php -e /ramdisk")
+    os.system(f"git clean -fd -e corpus_cache.pkl -e synth_out -e php -e seeds -e /ramdisk")
 
 
 def sanitize(php_file):
@@ -61,7 +62,7 @@ def profile_script(script_results):
 
 def analyze_corpus(input_dir,output_dir):
     for seed in [os.path.join(input_dir,i) for i in os.listdir(input_dir)]:
-        with open(seed, "r", encoding="utf-8", errors="ignore") as f:
+        with open(seed, "rb") as f:
             source = f.read()
         results = build_statement_dependencies(_build_ast(seed))
         analysis = [source,results]
@@ -70,7 +71,7 @@ def analyze_corpus(input_dir,output_dir):
             pickle.dump(analysis,f)
 
 def analyze_file(seed):
-    with open(seed, "r", encoding="utf-8", errors="ignore") as f:
+    with open(seed, "rb") as f:
         source = f.read()
     results = build_statement_dependencies(_build_ast(seed))
     return source,results
@@ -155,9 +156,9 @@ def print_node(entry):
     if start_file_pos is None or end_file_pos is None:
         print(f"[{filepath} stmt {stmt_id}]: no file position available")
         return
-    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+    with open(filepath, "rb") as f:
         source = f.read()
-    print(source[start_file_pos:end_file_pos + 1])
+    print(source[start_file_pos:end_file_pos + 1].decode('utf-8', errors='ignore'))
 
 COMP_TO_DESCRIPTIONS = {
     # Control regions (ControlComp comp_type -> PHP description strings)
@@ -186,7 +187,29 @@ COMP_TO_DESCRIPTIONS = {
 }
 
 
+HOISTABLE_DESCRIPTIONS = {
+    "Stmt_Function (region)",
+    "Stmt_ClassMethod (region)",
+    "Stmt_Class (region)",
+    "Stmt_Trait (region)",
+    "Stmt_Interface (region)",
+}
+
+# Hoisted definitions that carry their own scope: $this/self/static/parent
+# inside their bodies are legal, so they are exempt from the class-scope filter
+# that rejects bare inline snippets. (Stmt_ClassMethod is intentionally excluded:
+# hoisted to global scope, a method body's $this would be invalid.)
+_SELF_SCOPING_DEFS = {
+    "Stmt_Class",
+    "Stmt_Trait",
+    "Stmt_Interface",
+    "Stmt_Function",
+}
+
 CORPUS_CACHE_FILE = 'corpus_cache.pkl'
+# Bump when the on-disk cache layout changes so stale caches are rejected.
+# v2: node_type_index entries carry a trailing value_type field.
+CACHE_VERSION = 2
 
 
 def _is_php_seed(filepath, filename):
@@ -204,7 +227,7 @@ def _is_php_seed(filepath, filename):
 def _index_one_file(filepath):
     """Worker: parse a single seed file. Returns (filepath, source, results, entries) or None."""
     try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        with open(filepath, "rb") as f:
             source = f.read()
         ast = _build_ast_safe(filepath)
         if ast is None:
@@ -213,7 +236,8 @@ def _index_one_file(filepath):
         entries = []
         for r in results:
             desc = r['description']
-            entry = (filepath, r['stmt_id'], r.get('start_file_pos'), r.get('end_file_pos'))
+            entry = (filepath, r['stmt_id'], r.get('start_file_pos'),
+                     r.get('end_file_pos'), r.get('value_type'))
             entries.append((desc, entry))
         return (filepath, source, results, entries)
     except Exception as e:
@@ -260,21 +284,32 @@ def build_corpus_index(seed_dir, parallel=1):
     return node_type_index, file_cache, results_cache
 
 
-def save_corpus_cache(seed_dir, node_type_index, file_cache, results_cache):
+def save_corpus_cache(node_type_index, file_cache, results_cache):
     """Pickle the corpus index to disk."""
-    cache_path = os.path.join(seed_dir, CORPUS_CACHE_FILE)
-    with open(cache_path, 'wb') as f:
-        pickle.dump((node_type_index, file_cache, results_cache), f)
-    print(f"Cache saved to {cache_path}")
+    with open(CORPUS_CACHE_FILE, 'wb') as f:
+        pickle.dump((CACHE_VERSION, node_type_index, file_cache, results_cache), f)
+    print(f"Cache saved to {CORPUS_CACHE_FILE}")
 
 
-def load_corpus_cache(seed_dir):
-    """Load a previously saved corpus index from disk. Returns None if not found."""
-    cache_path = os.path.join(seed_dir, CORPUS_CACHE_FILE)
-    if not os.path.isfile(cache_path):
+def load_corpus_cache():
+    """Load a previously saved corpus index from disk.
+
+    Returns (node_type_index, file_cache, results_cache), or None if the cache
+    is missing or was written by an incompatible (older) layout version.
+    """
+    if not os.path.isfile(CORPUS_CACHE_FILE):
         return None
-    with open(cache_path, 'rb') as f:
-        return pickle.load(f)
+    with open(CORPUS_CACHE_FILE, 'rb') as f:
+        payload = pickle.load(f)
+    # Versioned caches are a 4-tuple led by the version int; anything else
+    # (e.g. a legacy 3-tuple) predates value-type entries and must be rebuilt.
+    if not (isinstance(payload, tuple) and len(payload) == 4
+            and payload[0] == CACHE_VERSION):
+        print(f"Ignoring stale corpus cache at {CORPUS_CACHE_FILE} "
+              f"(version mismatch); rebuilding.")
+        return None
+    _version, node_type_index, file_cache, results_cache = payload
+    return node_type_index, file_cache, results_cache
 
 
 def get_corpus_index(seed_dir, rebuild=False, parallel=1):
@@ -286,10 +321,10 @@ def get_corpus_index(seed_dir, rebuild=False, parallel=1):
         parallel: number of worker processes for building the index
     """
     if not rebuild:
-        cached = load_corpus_cache(seed_dir)
+        cached = load_corpus_cache()
         if cached is not None:
             node_type_index, file_cache, results_cache = cached
-            print(f"Loaded cached corpus index from {os.path.join(seed_dir, CORPUS_CACHE_FILE)} "
+            print(f"Loaded cached corpus index from {CORPUS_CACHE_FILE} "
                   f"({sum(len(v) for v in node_type_index.values())} statements, "
                   f"{len(node_type_index)} types, {len(file_cache)} files)")
             return node_type_index, file_cache, results_cache
@@ -299,8 +334,28 @@ def get_corpus_index(seed_dir, rebuild=False, parallel=1):
     node_type_index, file_cache, results_cache = build_corpus_index(seed_dir, parallel=parallel)
     print(f"Indexed {sum(len(v) for v in node_type_index.values())} statements "
           f"across {len(node_type_index)} types from {len(file_cache)} files")
-    save_corpus_cache(seed_dir, node_type_index, file_cache, results_cache)
+    save_corpus_cache(node_type_index, file_cache, results_cache)
     return node_type_index, file_cache, results_cache
+
+
+_DEF_NAME_RE = re.compile(
+    r'(?:function\s*&?\s*|class\s+|trait\s+|interface\s+)(\w+)', re.IGNORECASE
+)
+
+_CLASS_ONLY_MODIFIERS_RE = re.compile(
+    r'\b(?:(?:public|protected|private|abstract|final|static)\s+)+(?=function\b)'
+)
+
+
+def _strip_class_modifiers(text):
+    """Strip PHP class-only modifiers (public, protected, etc.) from function declarations."""
+    return _CLASS_ONLY_MODIFIERS_RE.sub('', text)
+
+
+def _extract_def_name(source_text, node_type):
+    """Extract the defined name (function/class/trait/interface) from source text."""
+    m = _DEF_NAME_RE.search(source_text)
+    return m.group(1) if m else None
 
 
 _name_counter = 0
@@ -312,45 +367,339 @@ def _next_name(prefix):
     return name
 
 
-def pick_data_source(data_comp, node_type_index, file_cache, results_cache):
-    """Pick a random PHP source snippet matching a DataComp, including dependencies."""
+_SIMPLE_VAR_RE = re.compile(r'^\$[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _is_simple_var(symbol):
+    """Check if a symbol is a simple scalar variable (e.g. $x, not $obj->prop)."""
+    return _SIMPLE_VAR_RE.match(symbol) is not None
+
+
+def _replace_variable(code, old_var, new_var):
+    """Replace a PHP variable name in source, matching whole identifiers only."""
+    pattern = re.escape(old_var) + r'(?![a-zA-Z0-9_\x80-\xff])'
+    return re.sub(pattern, lambda m: new_var, code)
+
+
+def _try_create_join(prev_defs, curr_free_uses, curr_inline):
+    """Try to create a join between two data slots.
+
+    Returns (join_assignment_str, modified_inline) or None.
+    """
+    joinable_defs = [d for d in prev_defs if _is_simple_var(d)]
+    joinable_uses = [u for u in curr_free_uses if _is_simple_var(u)]
+    if not joinable_defs or not joinable_uses:
+        return None
+    def_var = random.choice(joinable_defs)
+    use_var = random.choice(joinable_uses)
+    join_name = _next_name("join_var")
+    join_var = f"${join_name}"
+    join_assignment = f"{join_var} = {def_var};"
+    modified_inline = _replace_variable(curr_inline, use_var, join_var)
+    return (join_assignment, modified_inline)
+
+
+_MAX_CONTEXT_RETRIES = 25
+
+_CLASS_SCOPE_RE = re.compile(
+    r'\b(?:self|parent|static)\s*::'
+    r'|new\s+(?:self|static)\b'
+    r'|\)\s*:\s*(?:self|parent|static)\b'
+)
+
+CATCH_DESCRIPTIONS = {"Stmt_Catch (region)"}
+
+# PHP built-in functions that cannot be redeclared
+_PHP_BUILTINS = {
+    'unserialize', 'serialize', 'array_map', 'array_filter', 'array_merge',
+    'array_push', 'array_pop', 'array_shift', 'array_unshift', 'array_keys',
+    'array_values', 'array_slice', 'array_splice', 'array_search',
+    'array_reverse', 'array_unique', 'array_flip', 'array_chunk',
+    'array_combine', 'array_diff', 'array_intersect', 'count', 'sizeof',
+    'strlen', 'strpos', 'substr', 'str_replace', 'str_pad', 'strtolower',
+    'strtoupper', 'trim', 'ltrim', 'rtrim', 'explode', 'implode', 'join',
+    'sprintf', 'printf', 'fprintf', 'sscanf', 'number_format',
+    'isset', 'unset', 'empty', 'var_dump', 'print_r', 'var_export',
+    'is_array', 'is_string', 'is_int', 'is_float', 'is_bool', 'is_null',
+    'is_numeric', 'is_object', 'is_callable', 'gettype', 'settype',
+    'intval', 'floatval', 'strval', 'boolval',
+    'file_get_contents', 'file_put_contents', 'fopen', 'fclose', 'fread',
+    'fwrite', 'fgets', 'feof', 'file', 'file_exists', 'is_file', 'is_dir',
+    'mkdir', 'rmdir', 'rename', 'copy', 'unlink', 'glob', 'realpath',
+    'basename', 'dirname', 'pathinfo',
+    'json_encode', 'json_decode', 'json_last_error',
+    'preg_match', 'preg_match_all', 'preg_replace', 'preg_split',
+    'sort', 'rsort', 'asort', 'arsort', 'ksort', 'krsort', 'usort',
+    'in_array', 'array_key_exists', 'range', 'compact', 'extract',
+    'date', 'time', 'mktime', 'strtotime', 'microtime',
+    'class_exists', 'function_exists', 'method_exists', 'property_exists',
+    'get_class', 'get_parent_class', 'is_a', 'instanceof',
+    'header', 'setcookie', 'session_start', 'session_destroy',
+    'echo', 'print', 'die', 'exit',
+    'min', 'max', 'abs', 'ceil', 'floor', 'round', 'rand', 'mt_rand',
+    'pow', 'sqrt', 'log', 'exp',
+    'md5', 'sha1', 'hash', 'base64_encode', 'base64_decode',
+    'urlencode', 'urldecode', 'rawurlencode', 'rawurldecode',
+    'htmlspecialchars', 'htmlentities', 'strip_tags',
+    'array_walk', 'array_column', 'array_fill', 'array_pad',
+    'call_user_func', 'call_user_func_array',
+    'trigger_error', 'set_error_handler', 'restore_error_handler',
+    'define', 'defined', 'constant',
+    'ob_start', 'ob_end_clean', 'ob_get_contents', 'ob_flush',
+    'chr', 'ord', 'str_repeat', 'str_word_count', 'str_split',
+    'substr_count', 'substr_replace', 'str_contains', 'str_starts_with',
+    'str_ends_with', 'ucfirst', 'lcfirst', 'ucwords',
+    'ctype_alpha', 'ctype_digit', 'ctype_alnum',
+}
+
+
+# Contextual class keywords that always resolve inside the scope where they
+# legally appear; never treated as undefined user symbols.
+_CLASS_CONTEXT_KEYWORDS = {"self", "parent", "static"}
+
+_PHP_BUILTIN_SYMBOLS_CACHE = None
+
+
+def _php_builtin_symbols():
+    """Return a lowercased set of all PHP builtin function AND class/interface/
+    trait names available in the runtime interpreter.
+
+    Used to decide whether a structurally-referenced name (a function call,
+    `new X`, `X::y`, `extends X`) can actually resolve at runtime. Derived once
+    from the live `php` binary so it matches whatever extensions are loaded;
+    falls back to the small hand-maintained _PHP_BUILTINS set if `php` is
+    unavailable.
+    """
+    global _PHP_BUILTIN_SYMBOLS_CACHE
+    if _PHP_BUILTIN_SYMBOLS_CACHE is not None:
+        return _PHP_BUILTIN_SYMBOLS_CACHE
+    syms = set(n.lower() for n in _PHP_BUILTINS)
+    try:
+        out = subprocess.run(
+            ['php', '-r',
+             'echo json_encode(array_merge('
+             'get_defined_functions()["internal"],'
+             'get_declared_classes(),get_declared_interfaces(),'
+             'get_declared_traits()));'],
+            capture_output=True, text=True, timeout=30).stdout
+        for name in json.loads(out):
+            syms.add(name.lower())
+    except Exception as e:
+        print(f"Warning: could not load PHP builtin symbols ({e}); "
+              f"using minimal fallback set")
+    _PHP_BUILTIN_SYMBOLS_CACHE = syms
+    return syms
+
+
+def _has_class_scope_refs(text):
+    """Check if text contains class-scope references (self/parent/static)."""
+    return '$this' in text or _CLASS_SCOPE_RE.search(text) is not None
+
+
+def _needs_function_scope(text):
+    """Check if text contains constructs that require a function scope."""
+    return 'yield' in text
+
+
+def pick_data_source(data_comp, node_type_index, file_cache, results_cache,
+                     in_method=False, in_function=False, declared_names=None,
+                     strict=True):
+    """Pick a random PHP source snippet matching a DataComp, including dependencies.
+
+    Returns (hoisted, inline, primary_defs, free_uses) where hoisted contains
+    definitions (functions, classes, traits, interfaces) that must be placed
+    outside control structures; primary_defs are variables defined by the
+    selected statement; free_uses are variables used by the selected statement
+    that are not defined by any statement in the dependency closure.
+    Retries up to _MAX_CONTEXT_RETRIES times to avoid context-incompatible
+    snippets (e.g. $this/self outside class, yield outside function).
+    """
     descriptions = COMP_TO_DESCRIPTIONS.get(data_comp.comp_type, [])
     candidates = []
     for desc in descriptions:
         candidates.extend(node_type_index.get(desc, []))
     if not candidates:
-        return f"/* no match for {data_comp.comp_type} */"
-    entry = random.choice(candidates)
-    filepath, stmt_id, start_pos, end_pos = entry
-    if start_pos is None or end_pos is None:
-        return f"/* no position for {data_comp.comp_type} */"
-    source = file_cache.get(filepath)
-    if source is None:
-        return f"/* source not cached for {filepath} */"
-    results = results_cache.get(filepath)
-    if results is None:
-        # Fallback: just the single statement without deps
-        snippet = source[start_pos:end_pos + 1].strip()
-        if not snippet.endswith(';'):
-            snippet += ';'
-        return snippet
-    # Use dependency slice to include all required defining statements
-    dep_slice = get_dependency_slice(results, stmt_id, source)
-    # Ensure semicolon termination on the final line
-    lines = dep_slice.split('\n')
-    if lines and not lines[-1].rstrip().endswith(';'):
-        lines[-1] = lines[-1].rstrip() + ';'
-    return '\n'.join(lines)
+        return ([], f"/* no match for {data_comp.comp_type} */", set(), set())
+
+    # Type-directed selection (strict mode only): when the JOC pins a concrete
+    # value type, draw only from statements the corpus inferred to that type.
+    # Fall back to the full pool when the JOC is type-agnostic ("mixed"/None) or
+    # the typed bucket is empty, so precision never costs us coverage. In loose
+    # mode this filter is skipped, so any type-compatible statement may fill the
+    # slot (more variance, the original system's behavior). Entry layout:
+    # (filepath, stmt_id, start_pos, end_pos, value_type).
+    want_type = getattr(data_comp, 'type', None)
+    if strict and want_type not in (None, 'mixed'):
+        typed = [e for e in candidates if len(e) > 4 and e[4] == want_type]
+        if typed:
+            candidates = typed
+
+    if declared_names is None:
+        declared_names = set()
+
+    for _attempt in range(_MAX_CONTEXT_RETRIES):
+        entry = random.choice(candidates)
+        filepath, stmt_id, start_pos, end_pos = entry[0], entry[1], entry[2], entry[3]
+        if start_pos is None or end_pos is None:
+            return ([], f"/* no position for {data_comp.comp_type} */", set(), set())
+        source = file_cache.get(filepath)
+        if source is None:
+            return ([], f"/* source not cached for {filepath} */", set(), set())
+        results = results_cache.get(filepath)
+        if results is None:
+            raw = source[start_pos:end_pos + 1]
+            snippet = raw.decode('utf-8', errors='ignore').strip() if isinstance(raw, bytes) else raw.strip()
+            if not snippet.endswith(';'):
+                snippet += ';'
+            if not in_method and _has_class_scope_refs(snippet):
+                continue
+            if not in_function and _needs_function_scope(snippet):
+                continue
+            return ([], snippet, set(), set())
+        # Split dependency closure into hoistable definitions and inline statements
+        closure = get_dependency_closure(results, stmt_id)
+        hoisted_parts = []
+        inline_parts = []
+        required_refs = set()    # user function/class names this candidate needs
+        provided_names = set()   # function/class names this candidate defines
+        for sid in closure:
+            text = get_source_slice(results, sid, source)
+            if text is None:
+                continue
+            r = results[sid]
+            required_refs |= set(r.get('structural_refs', set()))
+            desc = r.get('description', '')
+            if desc in HOISTABLE_DESCRIPTIONS:
+                node_type = r.get('node_type', '')
+                hoisted_parts.append((text, node_type))
+                nm = _extract_def_name(text, node_type)
+                if nm:
+                    provided_names.add(nm.lower())
+            elif desc in CATCH_DESCRIPTIONS:
+                # Replace bare catch blocks with stub variable assignments
+                # to avoid "unexpected token catch" errors
+                catch_defs = r.get('defs', set())
+                for var in catch_defs:
+                    inline_parts.append(f'{var} = new Exception("stub");')
+            else:
+                inline_parts.append(text)
+                nm = _DEF_NAME_RE.search(text)
+                if nm:
+                    provided_names.add(nm.group(1).lower())
+
+        # Resolvability filter: reject candidates whose closure references a
+        # user function/class that is neither defined within the closure, already
+        # emitted by an earlier slot, nor a PHP builtin. Unresolvable references
+        # are the dominant runtime failure ("Call to undefined function" /
+        # "Class not found"), almost always because the symbol lived in another
+        # seed and never came along with the extracted statement.
+        resolved = (provided_names | declared_names | _php_builtin_symbols()
+                    | _CLASS_CONTEXT_KEYWORDS)
+        unresolved = False
+        for ref in required_refs:
+            rl = ref.lstrip('\\').lower()
+            if rl not in resolved and rl.split('\\')[-1] not in resolved:
+                unresolved = True
+                break
+        if unresolved:
+            continue
+        # Filter hoisted parts: remove class-scope refs when outside a class.
+        # Exception: class/trait/interface/function DEFINITIONS establish their
+        # own scope, so $this/self/static/parent inside their bodies are valid.
+        # Dropping them here is what left references like `new Foo()` with an
+        # undefined Foo -- the dominant "Uncaught Error: Class not found" cause.
+        if not in_method:
+            hoisted_parts = [
+                (t, n) for t, n in hoisted_parts
+                if n in _SELF_SCOPING_DEFS or not _has_class_scope_refs(t)
+            ]
+        # Check hoisted parts for name collisions
+        filtered_hoisted = []
+        has_name_collision = False
+        for text, node_type in hoisted_parts:
+            name = _extract_def_name(text, node_type)
+            if name and name.lower() in declared_names:
+                has_name_collision = True
+                continue  # skip redeclaration
+            filtered_hoisted.append((text, node_type))
+        hoisted_parts = filtered_hoisted
+        # Check inline parts for function/class declarations that collide
+        filtered_inline = []
+        for text in inline_parts:
+            name_match = _DEF_NAME_RE.search(text)
+            if name_match:
+                name = name_match.group(1)
+                if name.lower() in declared_names:
+                    has_name_collision = True
+                    continue  # skip redeclaration
+            filtered_inline.append(text)
+        inline_parts = filtered_inline
+        # Ensure semicolon termination on the final inline line
+        inline = '\n'.join(inline_parts)
+        lines = inline.split('\n')
+        if lines and not lines[-1].rstrip().endswith(';'):
+            lines[-1] = lines[-1].rstrip() + ';'
+        inline = '\n'.join(lines)
+        # Retry if snippet has context-incompatible references
+        if not in_method and _has_class_scope_refs(inline):
+            continue
+        if not in_function and _needs_function_scope(inline):
+            continue
+        # Register newly declared names from this pick
+        for text, node_type in hoisted_parts:
+            name = _extract_def_name(text, node_type)
+            if name:
+                declared_names.add(name.lower())
+        for text in inline_parts:
+            name_match = _DEF_NAME_RE.search(text)
+            if name_match:
+                declared_names.add(name_match.group(1).lower())
+        # Compute def/use metadata for join points
+        primary = results[stmt_id]
+        primary_defs = primary.get('defs', set())
+        closure_defs = set()
+        for sid in closure:
+            closure_defs.update(results[sid].get('defs', set()))
+        free_uses = primary.get('uses', set()) - closure_defs
+        return (hoisted_parts, inline, primary_defs, free_uses)
+
+    # Exhausted retries without finding a context-compatible, fully-resolvable
+    # candidate. Emit a benign placeholder rather than leaking a snippet with
+    # undefined symbols or out-of-scope references.
+    return ([], f"/* no resolvable {data_comp.comp_type} */", set(), set())
 
 
-def synthesize_region(region_list, node_type_index, file_cache, results_cache, indent=0):
-    """Synthesize PHP source for a nested control region."""
+def synthesize_region(region_list, node_type_index, file_cache, results_cache,
+                      indent=0, in_method=False, in_function=False,
+                      join_rate=0.0, declared_names=None, strict=True):
+    """Synthesize PHP source for a nested control region.
+
+    Returns (hoisted_lines, region_lines) where hoisted_lines contains
+    definitions that must be placed outside all control structures.
+    """
     if not region_list:
-        return []
+        return [], []
+    if declared_names is None:
+        declared_names = set()
     pad = "    " * indent
     ctrl = region_list[0]  # ControlComp
     ct = ctrl.comp_type
+    # Track whether we're inside a method/class context for $this filtering
+    child_in_method = in_method or ct in ("method", "class")
+    child_in_function = in_function or ct in ("func", "method")
+    hoisted = []
     lines = []
+
+    # Loop counter machinery for honoring ControlComp.trip_count on while/do_while:
+    # when the JOC pins an iteration count, emit a real bounded counter instead of
+    # the infinite-loop-guard fallback. loop_counter/loop_bound stay None otherwise.
+    # In loose mode trip counts are ignored, reverting to fixed default bounds
+    # (the original system's behavior).
+    trip_count = getattr(ctrl, 'trip_count', None) if strict else None
+    if not (isinstance(trip_count, int) and trip_count > 0):
+        trip_count = None
+    loop_counter = None
+    loop_bound = trip_count
 
     # Generate synthetic control wrapper
     if ct == "if":
@@ -359,10 +708,20 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache, i
         lines.append(f"{pad}if (!true) {{")  # else branch as negated if
     elif ct == "for":
         vname = _next_name("i")
-        lines.append(f"{pad}for (${vname} = 0; ${vname} < 10; ${vname}++) {{")
+        # Honor the inferred trip count as the loop bound (defaults to 10).
+        bound = trip_count if trip_count is not None else 10
+        lines.append(f"{pad}for (${vname} = 0; ${vname} < {bound}; ${vname}++) {{")
     elif ct == "while":
-        lines.append(f"{pad}while (true) {{")
+        if trip_count is not None:
+            loop_counter = _next_name("w")
+            lines.append(f"{pad}${loop_counter} = 0;")
+            lines.append(f"{pad}while (${loop_counter} < {loop_bound}) {{")
+        else:
+            lines.append(f"{pad}while (true) {{")
     elif ct == "do_while":
+        if trip_count is not None:
+            loop_counter = _next_name("d")
+            lines.append(f"{pad}${loop_counter} = 0;")
         lines.append(f"{pad}do {{")
     elif ct == "func":
         fname = _next_name("f")
@@ -384,51 +743,143 @@ def synthesize_region(region_list, node_type_index, file_cache, results_cache, i
     else:
         lines.append(f"{pad}/* unknown region: {ct} */ {{")
 
-    # Process body elements
+    # Phase 1: collect body elements with metadata
     body_pad = "    " * (indent + 1)
-    if ct == "while":
+    elements = []  # (kind, hoisted_parts, content, defs, free_uses)
+    if ct == "while" and loop_counter is None:
         lines.append(f"{body_pad}break;  // avoid infinite loop")
     for element in region_list[1:]:
         if isinstance(element, list):
-            lines.extend(synthesize_region(element, node_type_index, file_cache, results_cache, indent + 1))
+            sub_hoisted, sub_lines = synthesize_region(
+                element, node_type_index, file_cache, results_cache,
+                indent + 1, in_method=child_in_method,
+                in_function=child_in_function, join_rate=join_rate,
+                declared_names=declared_names, strict=strict)
+            elements.append(('region', sub_hoisted, sub_lines, None, None))
         elif isinstance(element, DataComp):
-            snippet = pick_data_source(element, node_type_index, file_cache, results_cache)
-            # Indent each line of the (possibly multi-line) dependency slice
-            for line in snippet.split('\n'):
-                lines.append(f"{body_pad}{line}")
+            hoisted_parts, inline_code, defs, free_uses = pick_data_source(
+                element, node_type_index, file_cache, results_cache,
+                in_method=child_in_method, in_function=child_in_function,
+                declared_names=declared_names, strict=strict)
+            elements.append(('data', hoisted_parts, inline_code, defs, free_uses))
         elif isinstance(element, ControlComp):
-            # Bare ControlComp in body (shouldn't normally happen, treat as data)
-            lines.append(f"{body_pad}/* bare control: {element.comp_type} */")
+            elements.append(('bare', [], f"/* bare control: {element.comp_type} */", None, None))
+
+    # Phase 2: assemble with joins
+    last_data_defs = None
+    for kind, h, content, defs, free_uses in elements:
+        hoisted.extend(h)
+        if kind == 'data':
+            if last_data_defs is not None and random.random() < join_rate:
+                result = _try_create_join(last_data_defs, free_uses, content)
+                if result:
+                    lines.append(f"{body_pad}{result[0]}")
+                    content = result[1]
+            for line in content.split('\n'):
+                lines.append(f"{body_pad}{line}")
+            last_data_defs = defs
+        elif kind == 'region':
+            lines.extend(content)
+        elif kind == 'bare':
+            lines.append(f"{body_pad}{content}")
+
+    # Advance the loop counter inside the body so counted while/do_while loops
+    # make progress toward their trip count.
+    if loop_counter is not None:
+        lines.append(f"{body_pad}${loop_counter}++;")
 
     # Close wrapper
     if ct == "do_while":
-        lines.append(f"{pad}}} while (false);")
+        if loop_counter is not None:
+            lines.append(f"{pad}}} while (${loop_counter} < {loop_bound});")
+        else:
+            lines.append(f"{pad}}} while (false);")
     elif ct == "try":
         lines.append(f"{pad}}} catch (Exception $e) {{}}")
     else:
         lines.append(f"{pad}}}")
 
-    return lines
+    return hoisted, lines
 
 
-def synthesize(constraint_env, node_type_index, file_cache, results_cache):
-    """Walk a JOC constraint tree and assemble a PHP script."""
+def synthesize(constraint_env, node_type_index, file_cache, results_cache,
+               join_rate=0.0, strict=True):
+    """Walk a JOC constraint tree and assemble a PHP script.
+
+    strict=True (default) enforces the JOC's inferred annotations: data slots are
+    filled with statements of the matching value type, and loops honor their trip
+    count. strict=False runs the original type-blind system (random type-compatible
+    statements, fixed default loop bounds) for more output variance.
+    """
     global _name_counter
     _name_counter = 0
 
-    lines = ["<?php"]
+    # Track declared function/class names globally to avoid redeclaration
+    # Pre-seed with PHP built-in names that cannot be redeclared
+    declared_names = set(n.lower() for n in _PHP_BUILTINS)
+
+    # Phase 1: collect elements with metadata
+    elements = []  # (kind, hoisted_parts, content, defs, free_uses)
     # constraint_env[0] is ControlComp('main'), skip it
     for element in constraint_env[1:]:
         if isinstance(element, list):
-            lines.extend(synthesize_region(element, node_type_index, file_cache, results_cache, indent=0))
+            sub_hoisted, sub_lines = synthesize_region(
+                element, node_type_index, file_cache, results_cache,
+                indent=0, join_rate=join_rate, declared_names=declared_names,
+                strict=strict)
+            elements.append(('region', sub_hoisted, sub_lines, None, None))
         elif isinstance(element, DataComp):
-            lines.append(pick_data_source(element, node_type_index, file_cache, results_cache))
+            hoisted_parts, inline_code, defs, free_uses = pick_data_source(
+                element, node_type_index, file_cache, results_cache,
+                declared_names=declared_names, strict=strict)
+            elements.append(('data', hoisted_parts, inline_code, defs, free_uses))
         elif isinstance(element, ControlComp):
-            lines.append(f"/* bare control: {element.comp_type} */")
+            elements.append(('bare', [], f"/* bare control: {element.comp_type} */", None, None))
+
+    # Phase 2: assemble with joins
+    hoisted = []
+    body = []
+    last_data_defs = None
+    for kind, h, content, defs, free_uses in elements:
+        hoisted.extend(h)
+        if kind == 'data':
+            if last_data_defs is not None and random.random() < join_rate:
+                result = _try_create_join(last_data_defs, free_uses, content)
+                if result:
+                    body.append(result[0])
+                    content = result[1]
+            body.append(content)
+            last_data_defs = defs
+        elif kind == 'region':
+            body.extend(content)
+        elif kind == 'bare':
+            body.append(content)
+
+    # Deduplicate hoisted definitions by name to avoid "Cannot redeclare" errors
+    # (PHP function/class names are case-insensitive). Use a LOCAL seen-set here:
+    # declared_names was already populated by pick_data_source as it selected
+    # each statement, so consulting it would skip every hoisted def as a
+    # redeclaration of itself -- dropping the very class/function definitions that
+    # the emitted references depend on. Seed only with builtins so we still avoid
+    # redeclaring those.
+    unique_hoisted = []
+    seen_defs = set(n.lower() for n in _PHP_BUILTINS)
+    for text, node_type in hoisted:
+        # Strip class-only modifiers from methods hoisted outside a class
+        if node_type == 'Stmt_ClassMethod':
+            text = _strip_class_modifiers(text)
+        name = _extract_def_name(text, node_type)
+        if name:
+            key = name.lower()
+            if key in seen_defs:
+                continue
+            seen_defs.add(key)
+        unique_hoisted.append(text)
+    lines = ["<?php"] + unique_hoisted + body
     return "\n".join(lines) + "\n"
 
 
-def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1):
+def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=1, join_rate=0.0, strict=True):
     """Run an infinite fuzzing loop: synthesize, write, sanitize, repeat."""
     # Load all constraints
     pickle_files = sorted([
@@ -460,7 +911,7 @@ def fuzz_loop(constraints_dir, seed_dir, out_dir, rebuild_cache=False, parallel=
                 _clean()
             iteration += 1
             pf, constraint = random.choice(constraints)
-            php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
+            php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=join_rate, strict=strict)
             base_name = os.path.splitext(os.path.basename(pf))[0]
             out_name = f"fuzz_{base_name}_{token_hex(5)}.php"
             out_path = os.path.join(out_dir, out_name)
@@ -499,15 +950,33 @@ def main():
                         help='Number of scripts to generate per constraint (default: 1)')
     parser.add_argument('--out', metavar='DIR', default='./synth_out',
                         help='Output directory for generated .php files (default: ./synth_out)')
+    parser.add_argument('--build-cache', action='store_true',
+                        help='Build (or rebuild) the corpus cache and exit')
     parser.add_argument('--rebuild-cache', action='store_true',
                         help='Force rebuild of the corpus cache even if one exists')
+    parser.add_argument('--join-rate', type=float, default=0.0,
+                        help='Probability (0.0-1.0) of creating join variables between '
+                             'consecutive data statements (default: 0.0)')
+    parser.add_argument('--loose', action='store_true',
+                        help='Run the original type-blind synthesizer: ignore JOC '
+                             'value-type and trip-count annotations (random '
+                             'type-compatible statements, fixed default loop bounds) '
+                             'for more output variance. Default is strict, which '
+                             'enforces those annotations.')
     parser.add_argument('-j', '--jobs', type=int, default=1,
                         help='Number of parallel worker processes (default: 1)')
     args = parser.parse_args()
 
+    if args.build_cache:
+        get_corpus_index(args.seeds, rebuild=True, parallel=args.jobs)
+        return
+
+    strict = not args.loose
+
     if args.fuzz:
         fuzz_loop(args.fuzz, args.seeds, args.out,
-                  rebuild_cache=args.rebuild_cache, parallel=args.jobs)
+                  rebuild_cache=args.rebuild_cache, parallel=args.jobs,
+                  join_rate=args.join_rate, strict=strict)
 
     elif args.synth:
         # Collect constraint pickle files
@@ -528,7 +997,7 @@ def main():
             constraint = load_constraint(pf)
             base_name = os.path.splitext(os.path.basename(pf))[0]+token_hex(5)
             for i in range(args.count):
-                php_source = synthesize(constraint, node_type_index, file_cache, results_cache)
+                php_source = synthesize(constraint, node_type_index, file_cache, results_cache, join_rate=args.join_rate, strict=strict)
                 if args.count == 1:
                     out_name = f"{base_name}.php"
                 else:
