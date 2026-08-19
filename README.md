@@ -1,10 +1,10 @@
-# jitsynth
+# optgatefuzz
 
-Synthesizes PHP scripts from JIT-exercising constraint trees. Given a structural description of a program (its control flow skeleton and data operations), jitsynth fills each slot with real PHP source from a seed corpus to produce new PHP scripts that match the constraint's shape.
+Synthesizes PHP scripts from JIT-exercising constraint trees. Given a structural description of a program (its control flow skeleton and data operations), optgatefuzz fills each slot with real PHP source from a seed corpus to produce new PHP scripts that match the constraint's shape.
 
 ## How it works
 
-jitsynth connects two sides:
+optgatefuzz connects two sides:
 
 - **JOC constraints** — nested trees of `ControlComp` and `DataComp` nodes describing the structural shape of JIT-exercising programs (e.g. "a function containing a for loop with an update, followed by three function calls")
 - **PHP seed corpus** — ~509 real PHP scripts, analyzed at the statement level with dependency tracking
