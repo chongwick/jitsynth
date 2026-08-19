@@ -1,6 +1,6 @@
 # optgatefuzz
 
-Synthesizes PHP scripts from JIT-exercising constraint trees. Given a structural description of a program (its control flow skeleton and data operations), optgatefuzz fills each slot with real PHP source from a seed corpus to produce new PHP scripts that match the constraint's shape.
+Generates PHP scripts from JIT-exercising constraint trees. Given a structural description of a program (its control flow skeleton and data operations), optgatefuzz fills each slot with real PHP source from a seed corpus to produce new PHP scripts that match the constraint's shape.
 
 ## How it works
 
